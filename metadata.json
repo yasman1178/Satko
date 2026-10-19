@@ -1,0 +1,6 @@
+{
+  "name": "Mindplicit Studio - استوديو الفيديوهات السيكولوجية",
+  "description": "نظام متكامل لإنتاج فيديوهات علم النفس والماكيافيلية الطويلة مع توليد الصوتيات والذاكرة الخارجية الذكية وتحليل البيانات.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

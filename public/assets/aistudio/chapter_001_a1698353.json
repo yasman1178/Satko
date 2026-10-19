@@ -1,0 +1,280 @@
+{
+  "project": {
+    "title": "How Manipulators Plant Doubt in Your Memory to Destroy Your Self-Trust",
+    "language": "en",
+    "voice": "en-GB-RyanNeural",
+    "target_minutes": 28
+  },
+  "chapters": [
+    {
+      "chapter_id": 1,
+      "title": "The Phantom Alteration",
+      "scenes": [
+        {
+          "scene_id": "scene_001",
+          "narration_text": "You remember the conversation clearly, yet someone you trust looks you in the eye and swears it never happened.",
+          "image_filename": "scene_001.png",
+          "image_prompt_en": "A scholar sitting at a heavy oak desk in a dimly lit study, staring in quiet disbelief at a sealed letter, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "static",
+          "transition": "fade"
+        },
+        {
+          "scene_id": "scene_002",
+          "narration_text": "At first, you brush it off as a simple lapse in your own memory. You assume anyone can forget a detail.",
+          "image_filename": "scene_002.png",
+          "image_prompt_en": "Over-the-shoulder view of a noble figure contemplating an hourglass on a marble mantle, deep shadows around the room, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_003",
+          "narration_text": "However, the contradiction repeats tomorrow, and again next week, with absolute confidence from the other person.",
+          "image_filename": "scene_003.png",
+          "image_prompt_en": "Medium shot of two figures in an arched stone gallery, one standing firm in shadow while the other steps back cautiously, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_right",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_004",
+          "narration_text": "Slowly, a quiet shift occurs inside your mind. You stop trusting what you saw with your own eyes.",
+          "image_filename": "scene_004.png",
+          "image_prompt_en": "Close up on a hand reaching toward a flickering candle flame, reflection shimmering in a tarnished silver mirror, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_005",
+          "narration_text": "This is not accidental forgetfulness. It is a systematic challenge designed to replace your certainty with permanent hesitation.",
+          "image_filename": "scene_005.png",
+          "image_prompt_en": "Wide shot of a grand mahogany library filled with shadows, a solitary figure walking between towering bookcases, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_left",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_006",
+          "narration_text": "Psychological researchers observe that targeted confidence erosion relies on persistent denial rather than aggressive confrontation.",
+          "image_filename": "scene_006.png",
+          "image_prompt_en": "Symbolic close-up of a carved wooden chess king standing alone on a dark chessboard, lit by a single beam of light, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_out",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_007",
+          "narration_text": "When a partner or colleague repeatedly reframes past events, your brain begins to doubt its own recall mechanisms.",
+          "image_filename": "scene_007.png",
+          "image_prompt_en": "Medium shot of a strategist unrolling a faded map across a dark wooden table in a dimly lit chamber, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_right",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_008",
+          "narration_text": "Studies show that human memory is inherently malleable, making it vulnerable when challenged by an authoritative voice.",
+          "image_filename": "scene_008.png",
+          "image_prompt_en": "Over-the-shoulder view of an advisor leaning forward toward a seated lord in a stone hall, heavy velvet drapes in background, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_009",
+          "narration_text": "The manipulator does not need to convince you fully today. They only need to plant one seed of doubt.",
+          "image_filename": "scene_009.png",
+          "image_prompt_en": "Close-up of a gloved hand holding a brass key near a locked iron chest in shadow, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_left",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_010",
+          "narration_text": "Over time, that single seed grows into a habit of second guessing every perception and every decision you make.",
+          "image_filename": "scene_010.png",
+          "image_prompt_en": "Wide shot of an empty courtyard at twilight with long stretching shadows across cobblestones, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_out",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_011",
+          "narration_text": "You find yourself checking notes, searching old messages, or mentally rehearsing conversations just to prove your sanity.",
+          "image_filename": "scene_011.png",
+          "image_prompt_en": "Medium shot of a thinker examining old parchment manuscripts by candlelight in a high ceilinged vaulted chamber, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "cut"
+        },
+        {
+          "scene_id": "scene_012",
+          "narration_text": "This exhaustion is not a byproduct of the tactic. It is the primary objective of the manipulator.",
+          "image_filename": "scene_012.png",
+          "image_prompt_en": "Symbolic close-up of an intricate brass astrolabe resting on dark velvet, lit by gold highlights, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "static",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_013",
+          "narration_text": "When you are mentally fatigued, you become far more likely to yield and accept their version of reality.",
+          "image_filename": "scene_013.png",
+          "image_prompt_en": "Over-the-shoulder view of a weary traveler sitting by a dying fireplace in a stone tavern, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_right",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_014",
+          "narration_text": "In relationships, this dynamic creates an uneven power balance where one person acts as the sole arbiter of truth.",
+          "image_filename": "scene_014.png",
+          "image_prompt_en": "Wide shot of a throne room where a shadowy monarch sits above court advisors, dark crimson banners hanging, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_out",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_015",
+          "narration_text": "In workplace environments, supervisors or peers use this method to shift blame and cover their own missteps.",
+          "image_filename": "scene_015.png",
+          "image_prompt_en": "Medium shot of guild masters standing around a long council table covered in ledgers, tension in their posture, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_left",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_016",
+          "narration_text": "Regardless of the setting, the underlying pattern remains identical across intimate and professional spheres.",
+          "image_filename": "scene_016.png",
+          "image_prompt_en": "Close-up of a balance scale with one side heavily weighted down in shadow, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_017",
+          "narration_text": "Machiavelli wrote that men respond more willingly to fear than to affection when power is at stake.",
+          "image_filename": "scene_017.png",
+          "image_prompt_en": "Medium shot of a dark statesman writing with a quill at a desk near an arched window, moonlight pouring in, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_right",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_018",
+          "narration_text": "Modern psychological literature confirms that dark personalities utilize confusion as a low cost instrument of control.",
+          "image_filename": "scene_018.png",
+          "image_prompt_en": "Wide shot of a foggy stone labyrinth under a moonlit night sky, steep dark walls, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_out",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_019",
+          "narration_text": "Understanding this mechanism is the first step toward breaking its hold on your confidence.",
+          "image_filename": "scene_019.png",
+          "image_prompt_en": "Close-up of a hand placing a lantern on a stone pedestal, casting away dark shadows, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_020",
+          "narration_text": "When you recognize that the goal is disorientation, the confusion loses its power to paralyze you.",
+          "image_filename": "scene_020.png",
+          "image_prompt_en": "Medium shot of a figure standing tall at the edge of an elevated stone balcony overlooking a dramatic vista, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_left",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_021",
+          "narration_text": "Instead of arguing over altered details, you begin to observe the tactic itself with calm detachment.",
+          "image_filename": "scene_021.png",
+          "image_prompt_en": "Over-the-shoulder view of a scholar observing a chess match from a distance in a quiet hall, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_022",
+          "narration_text": "You no longer seek validation from the very person who is trying to undermine your reality.",
+          "image_filename": "scene_022.png",
+          "image_prompt_en": "Close-up of a broken wax seal on a thick document resting on a dark desk, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_right",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_023",
+          "narration_text": "Once you see the pattern clearly, you can start anchoring your perception in concrete evidence.",
+          "image_filename": "scene_023.png",
+          "image_prompt_en": "Wide shot of a solitary lighthouse on a rugged cliff face in a dark tempestuous sea, light beam cutting through fog, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_out",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_024",
+          "narration_text": "To protect your memory from rewrite, you must first understand how manipulators construct their false narratives.",
+          "image_filename": "scene_024.png",
+          "image_prompt_en": "Medium shot of an archivist closing a heavy leather-bound volume in a shadowy library room, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_025",
+          "narration_text": "Recording facts in real time creates an unshakeable baseline that no verbal denial can erase.",
+          "image_filename": "scene_025.png",
+          "image_prompt_en": "Close-up of a fountain pen resting beside neat lines of ink on a parchment ledger, illuminated by a candle beam, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_left",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_026",
+          "narration_text": "When an interaction ends, write down the date, the place, and the exact words spoken.",
+          "image_filename": "scene_026.png",
+          "image_prompt_en": "Over-the-shoulder view of a scribe carefully blotting ink on a newly written document in a quiet room, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_027",
+          "narration_text": "External documentation serves as an objective mirror, reflecting the truth back to you when self doubt creeps in.",
+          "image_filename": "scene_027.png",
+          "image_prompt_en": "Medium shot of a polished obsidian mirror set on an ornate desk, reflecting a clear flame, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_right",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_028",
+          "narration_text": "Manipulators thrive in ambiguity, but concrete records strip away their ability to rewrite history.",
+          "image_filename": "scene_028.png",
+          "image_prompt_en": "Symbolic shot of a iron key turning in a brass clockwork lock, dramatic side lighting, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_out",
+          "transition": "cut"
+        },
+        {
+          "scene_id": "scene_029",
+          "narration_text": "By holding firm to your documented reality, you refuse to participate in the distortion.",
+          "image_filename": "scene_029.png",
+          "image_prompt_en": "Wide shot of a solitary figure standing resolute before a stone wall as fog rolls past, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "static",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_030",
+          "narration_text": "Next, we examine the precise psychological levers manipulators use to make you doubt your own senses.",
+          "image_filename": "scene_030.png",
+          "image_prompt_en": "Medium shot of a clockmaker examining complex gears under a magnifying glass in a shadowy workshop, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_left",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_031",
+          "narration_text": "They begin by targeting small, insignificant details before moving on to major commitments.",
+          "image_filename": "scene_031.png",
+          "image_prompt_en": "Close-up of small wooden dominoes lined up on a polished dark surface, single spot light, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_in",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_032",
+          "narration_text": "This incremental escalation ensures that you adapt to the distortion without noticing the shift.",
+          "image_filename": "scene_032.png",
+          "image_prompt_en": "Over-the-shoulder view of a shadow stretching across an ancient stone staircase leading into darkness, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "pan_right",
+          "transition": "dissolve"
+        },
+        {
+          "scene_id": "scene_033",
+          "narration_text": "Uncovering these subtle levers is the key to neutralizing their influence before it deepens.",
+          "image_filename": "scene_033.png",
+          "image_prompt_en": "Wide shot of a quiet scholar blowing out a candle flame as morning light emerges through a tall arched window, cinematic renaissance oil painting, dark baroque style, chiaroscuro lighting, dramatic shadows, painterly texture, moody atmosphere, deep crimson and black palette, muted gold highlights, smoky atmosphere, film grain, shallow depth of field, 16:9. Avoid: modern clothing, neon colors, anime, cartoon, text, watermark, logo, blurry, low quality",
+          "motion": "zoom_out",
+          "transition": "dissolve"
+        }
+      ]
+    }
+  ]
+}
