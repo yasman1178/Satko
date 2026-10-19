@@ -14,7 +14,7 @@ import {
   Layers,
 } from 'lucide-react';
 
-export interface TimedSentence {
+export interface TimedWordChunk {
   text: string;
   startProgress: number; // 0 to 1
   endProgress: number;   // 0 to 1
@@ -22,33 +22,70 @@ export interface TimedSentence {
 }
 
 /**
- * Splits scene narration text into distinct sentences and assigns proportional
- * playback time based on word weight to enable synchronized active sentence subtitles.
+ * Splits scene narration text into punchy 3 to 5 word chunks based on natural pauses
+ * and assigns proportional playback time based on word count.
  */
-export function splitTextIntoTimedSentences(text: string): TimedSentence[] {
+export function splitTextIntoWordChunks(text: string): TimedWordChunk[] {
   if (!text || !text.trim()) return [];
 
-  // Match sentences ending with ., !, ?, ؟, or newline
-  const rawMatches = text.match(/[^.!?؟\n]+(?:[.!?؟\n]+|$)/g);
-  const sentences = (rawMatches || [text])
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const rawWords = text.trim().split(/\s+/).filter(Boolean);
+  if (rawWords.length === 0) return [];
 
-  if (sentences.length === 0) {
-    return [{ text: text.trim(), startProgress: 0, endProgress: 1, wordCount: Math.max(1, text.split(/\s+/).length) }];
+  if (rawWords.length <= 4) {
+    return [{ text: rawWords.join(' '), startProgress: 0, endProgress: 1, wordCount: rawWords.length }];
   }
 
-  const wordCounts = sentences.map((s) => Math.max(1, s.split(/\s+/).filter(Boolean).length));
+  const chunks: string[] = [];
+  let currentWords: string[] = [];
+
+  for (let i = 0; i < rawWords.length; i++) {
+    const word = rawWords[i];
+    currentWords.push(word);
+
+    const hasPause = /[,;:.!?؟—]$/.test(word);
+    const count = currentWords.length;
+    const remainingWords = rawWords.length - 1 - i;
+
+    // Break when:
+    // - Reached 3+ words and hit a pause punctuation (and remaining is at least 2 words)
+    // - Reached 4 words and remaining is at least 3 words
+    // - Hit 5 words (strict maximum limit)
+    // - End of word list
+    const shouldBreak =
+      (count >= 3 && hasPause && remainingWords >= 2) ||
+      (count >= 4 && remainingWords >= 3) ||
+      count >= 5 ||
+      i === rawWords.length - 1;
+
+    if (shouldBreak) {
+      // Avoid leaving an isolated single word at the end if we can merge it into current chunk
+      if (remainingWords === 1 && count < 5) {
+        continue;
+      }
+      chunks.push(currentWords.join(' '));
+      currentWords = [];
+    }
+  }
+
+  if (currentWords.length > 0) {
+    if (chunks.length > 0 && currentWords.length < 3) {
+      chunks[chunks.length - 1] = `${chunks[chunks.length - 1]} ${currentWords.join(' ')}`;
+    } else {
+      chunks.push(currentWords.join(' '));
+    }
+  }
+
+  const wordCounts = chunks.map((c) => Math.max(1, c.split(/\s+/).filter(Boolean).length));
   const totalWords = wordCounts.reduce((acc, c) => acc + c, 0);
 
   let currentStart = 0;
-  return sentences.map((s, idx) => {
+  return chunks.map((chunkText, idx) => {
     const fraction = wordCounts[idx] / totalWords;
     const start = currentStart;
-    const end = idx === sentences.length - 1 ? 1.0 : Math.min(1.0, currentStart + fraction);
+    const end = idx === chunks.length - 1 ? 1.0 : Math.min(1.0, currentStart + fraction);
     currentStart = end;
     return {
-      text: s,
+      text: chunkText,
       startProgress: start,
       endProgress: end,
       wordCount: wordCounts[idx],
@@ -111,37 +148,37 @@ export function TimelinePlayer({
   const animationFrameRef = useRef<number | null>(null);
   const sceneStartTimeRef = useRef<number>(0);
 
-  // Synchronized active sentence calculations
-  const timedSentences = useMemo(
-    () => splitTextIntoTimedSentences(currentScene?.narration_text || ''),
+  // Synchronized active word chunk (3 to 5 words) calculations
+  const timedChunks = useMemo(
+    () => splitTextIntoWordChunks(currentScene?.narration_text || ''),
     [currentScene?.narration_text]
   );
 
-  const activeSentenceIndex = useMemo(() => {
-    if (timedSentences.length === 0) return 0;
-    const idx = timedSentences.findIndex(
+  const activeChunkIndex = useMemo(() => {
+    if (timedChunks.length === 0) return 0;
+    const idx = timedChunks.findIndex(
       (s) => sceneProgress >= s.startProgress && sceneProgress < s.endProgress
     );
     if (idx !== -1) return idx;
-    return sceneProgress >= 1 ? timedSentences.length - 1 : 0;
-  }, [timedSentences, sceneProgress]);
+    return sceneProgress >= 1 ? timedChunks.length - 1 : 0;
+  }, [timedChunks, sceneProgress]);
 
-  const activeSentence = useMemo(() => {
+  const activeChunk = useMemo(() => {
     return (
-      timedSentences[activeSentenceIndex] ||
-      timedSentences[0] || {
+      timedChunks[activeChunkIndex] ||
+      timedChunks[0] || {
         text: currentScene?.narration_text || '',
         startProgress: 0,
         endProgress: 1,
         wordCount: 1,
       }
     );
-  }, [timedSentences, activeSentenceIndex, currentScene?.narration_text]);
+  }, [timedChunks, activeChunkIndex, currentScene?.narration_text]);
 
-  const sentenceSpan = Math.max(0.001, activeSentence.endProgress - activeSentence.startProgress);
-  const sentenceInnerProgress = Math.min(
+  const chunkSpan = Math.max(0.001, activeChunk.endProgress - activeChunk.startProgress);
+  const chunkInnerProgress = Math.min(
     1,
-    Math.max(0, (sceneProgress - activeSentence.startProgress) / sentenceSpan)
+    Math.max(0, (sceneProgress - activeChunk.startProgress) / chunkSpan)
   );
 
   // Calculate total timeline duration
@@ -189,7 +226,7 @@ export function TimelinePlayer({
     }
   }, [activeSceneIndex, currentScene, isMuted, isPlaying, playbackSpeed]);
 
-  // Main Canvas render loop with Ken Burns motion, MachinaMind branding & active sentence subtitles
+  // Main Canvas render loop with Ken Burns motion, MachinaMind branding & 3-5 word subtitle rendering
   const renderFrame = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -337,88 +374,66 @@ export function TimelinePlayer({
     ctx.restore();
 
     // ─────────────────────────────────────────────────────────────
-    // Active Sentence Subtitles on Canvas (Sentence-by-sentence)
+    // Active 3-5 Word Phrase Subtitles on Canvas
     // ─────────────────────────────────────────────────────────────
-    if (showCaptions && activeSentence?.text) {
+    if (showCaptions && activeChunk?.text) {
       // Bottom cinematic gradient scrim
-      const textScrim = ctx.createLinearGradient(0, height - 260, 0, height);
+      const textScrim = ctx.createLinearGradient(0, height - 200, 0, height);
       textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      textScrim.addColorStop(0.35, 'rgba(0, 0, 0, 0.72)');
+      textScrim.addColorStop(0.4, 'rgba(0, 0, 0, 0.7)');
       textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.95)');
       ctx.fillStyle = textScrim;
-      ctx.fillRect(0, height - 260, width, 260);
+      ctx.fillRect(0, height - 200, width, 200);
 
-      // Subtitle card container
-      const subCardW = Math.min(1360, width * 0.78);
-      const subCardH = 144;
+      // Compact Subtitle card container (proportional for 3-5 words)
+      const subCardW = Math.min(1000, width * 0.6);
+      const subCardH = 92;
       const subCardX = (width - subCardW) / 2;
-      const subCardY = height - 195;
+      const subCardY = height - 165;
 
       ctx.save();
-      ctx.fillStyle = 'rgba(9, 13, 22, 0.86)';
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)';
+      ctx.fillStyle = 'rgba(9, 13, 22, 0.88)';
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
       ctx.lineWidth = 1.5;
-      drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, 16);
+      drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, 14);
       ctx.fill();
       ctx.stroke();
 
-      // Top caption label: MachinaMind · Sentence X/Y
+      // Top caption indicator: MachinaMind · [X/Y]
       ctx.fillStyle = '#F59E0B';
-      ctx.font = 'bold 16px monospace';
+      ctx.font = 'bold 15px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       ctx.fillText(
-        `MachinaMind Subtitles · [${activeSentenceIndex + 1}/${timedSentences.length}]`,
+        `MachinaMind · [${activeChunkIndex + 1}/${timedChunks.length}]`,
         width / 2,
-        subCardY + 14
+        subCardY + 12
       );
 
-      // Active sentence text (prominent, high contrast with golden glow)
+      // Active 3-5 words text (punchy, high contrast with golden glow)
       ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 32px "Plus Jakarta Sans", sans-serif';
+      ctx.font = 'bold 36px "Plus Jakarta Sans", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.shadowColor = 'rgba(245, 158, 11, 0.4)';
+      ctx.shadowColor = 'rgba(245, 158, 11, 0.45)';
       ctx.shadowBlur = 12;
+      ctx.fillText(activeChunk.text.trim(), width / 2, subCardY + 48);
 
-      const words = activeSentence.text.split(' ');
-      let line = '';
-      const lines: string[] = [];
-      const maxWidth = subCardW - 60;
-
-      for (let n = 0; n < words.length; n++) {
-        const testLine = line + words[n] + ' ';
-        const metrics = ctx.measureText(testLine);
-        if (metrics.width > maxWidth && n > 0) {
-          lines.push(line);
-          line = words[n] + ' ';
-        } else {
-          line = testLine;
-        }
-      }
-      lines.push(line);
-
-      const textCenterY = subCardY + 68;
-      lines.slice(0, 2).forEach((l, idx) => {
-        const offset = lines.length === 1 ? 0 : (idx === 0 ? -16 : 18);
-        ctx.fillText(l.trim(), width / 2, textCenterY + offset);
-      });
-
-      // Subtle active sentence reading progress bar
-      const progBarW = subCardW - 80;
-      const progBarH = 4;
+      // Subtle active chunk reading progress bar
+      const progBarW = subCardW - 60;
+      const progBarH = 3;
       const progBarX = (width - progBarW) / 2;
-      const progBarY = subCardY + subCardH - 14;
+      const progBarY = subCardY + subCardH - 12;
 
       ctx.shadowBlur = 0;
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
-      drawRoundRect(ctx, progBarX, progBarY, progBarW, progBarH, 2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+      drawRoundRect(ctx, progBarX, progBarY, progBarW, progBarH, 1.5);
       ctx.fill();
 
       ctx.fillStyle = '#F59E0B';
-      const filledW = progBarW * sentenceInnerProgress;
+      const filledW = progBarW * chunkInnerProgress;
       if (filledW > 0) {
-        drawRoundRect(ctx, progBarX, progBarY, filledW, progBarH, 2);
+        drawRoundRect(ctx, progBarX, progBarY, filledW, progBarH, 1.5);
         ctx.fill();
       }
 
@@ -429,10 +444,10 @@ export function TimelinePlayer({
     loadedImages,
     sceneProgress,
     showCaptions,
-    activeSentence,
-    activeSentenceIndex,
-    timedSentences.length,
-    sentenceInnerProgress,
+    activeChunk,
+    activeChunkIndex,
+    timedChunks.length,
+    chunkInnerProgress,
   ]);
 
   // Main animation / timing tick
@@ -546,62 +561,62 @@ export function TimelinePlayer({
         />
 
         {/* Top Info Bar inside player */}
-        <div className="absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/85 via-black/35 to-transparent flex items-center justify-between pointer-events-none">
-          <div className="flex items-center gap-2.5">
-            <span className="flex h-6 items-center px-2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-mono font-bold">
+        <div className="absolute top-0 inset-x-0 p-3 sm:p-4 bg-gradient-to-b from-black/85 via-black/35 to-transparent flex items-center justify-between pointer-events-none z-10">
+          <div className="flex items-center gap-2">
+            <span className="flex h-5 sm:h-6 items-center px-1.5 sm:px-2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] sm:text-[11px] font-mono font-bold">
               {currentScene?.scene_id} ({activeSceneIndex + 1}/{scenes.length})
             </span>
-            <span className="text-xs font-medium text-slate-200">
+            <span className="hidden sm:inline-block text-xs font-medium text-slate-200">
               حركة: <span className="text-amber-400 font-mono">{currentScene?.motion}</span>
             </span>
           </div>
 
           {/* MachinaMind Channel Watermark Badge & Clock in Top-Right */}
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/85 backdrop-blur-md border border-amber-500/40 text-amber-300 shadow-xl">
-              <span className="flex h-5 w-5 items-center justify-center rounded bg-amber-400 text-slate-950 font-bold text-xs shadow-sm">
+          <div className="flex items-center gap-2 sm:gap-3 pointer-events-auto">
+            <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 py-1 rounded-xl bg-slate-950/85 backdrop-blur-md border border-amber-500/40 text-amber-300 shadow-xl">
+              <span className="flex h-4 w-4 sm:h-5 sm:w-5 items-center justify-center rounded bg-amber-400 text-slate-950 font-bold text-[10px] sm:text-xs shadow-sm">
                 M
               </span>
-              <span className="font-sans font-bold tracking-wider text-xs text-white">
+              <span className="font-sans font-bold tracking-wider text-[11px] sm:text-xs text-white">
                 MachinaMind
               </span>
             </div>
 
-            <div className="flex items-center gap-2 text-xs font-mono text-slate-300 tabular-nums bg-slate-950/70 px-2.5 py-1.5 rounded-xl border border-slate-800">
-              <Clock className="h-3.5 w-3.5 text-slate-400" />
+            <div className="flex items-center gap-1.5 text-[10px] sm:text-xs font-mono text-slate-300 tabular-nums bg-slate-950/70 px-2 sm:px-2.5 py-1 rounded-xl border border-slate-800">
+              <Clock className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-slate-400" />
               <span>{formatTime(totalElapsedSec)} / {formatTime(totalDurationSec)}</span>
             </div>
           </div>
         </div>
 
-        {/* Active Sentence Subtitles Overlay Banner (Dynamic Sentence-by-Sentence) */}
-        {showCaptions && activeSentence?.text && (
-          <div className="absolute bottom-24 inset-x-4 sm:inset-x-12 md:inset-x-24 pointer-events-none flex flex-col items-center justify-center text-center">
-            <div className="max-w-3xl w-full rounded-2xl bg-slate-950/90 backdrop-blur-md border border-amber-500/35 p-4 sm:p-5 shadow-2xl relative overflow-hidden transition-all duration-300">
-              {/* Header badge with current sentence index */}
-              <div className="flex items-center justify-between text-[11px] font-mono text-amber-400/90 mb-2.5">
-                <span className="font-bold flex items-center gap-1.5">
-                  <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                  <span>MachinaMind Subtitles</span>
+        {/* Active 3-5 Words Dynamic Subtitle Overlay (Compact, Above Controls, Non-Blocking) */}
+        {showCaptions && activeChunk?.text && (
+          <div className="absolute bottom-14 sm:bottom-16 md:bottom-20 inset-x-3 sm:inset-x-8 flex justify-center pointer-events-none z-10">
+            <div className="max-w-md sm:max-w-xl w-auto min-w-[240px] rounded-xl bg-slate-950/92 backdrop-blur-md border border-amber-500/35 px-3.5 py-1.5 sm:px-5 sm:py-2.5 shadow-2xl relative overflow-hidden transition-all duration-150 text-center">
+              {/* Header badge with current 3-5 word chunk index */}
+              <div className="flex items-center justify-between text-[9px] sm:text-[10px] font-mono text-amber-400/90 mb-1">
+                <span className="font-bold flex items-center gap-1">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                  <span>MachinaMind</span>
                 </span>
-                <span className="text-slate-300 bg-slate-900/80 px-2 py-0.5 rounded border border-slate-800">
-                  الجملة {activeSentenceIndex + 1} من {timedSentences.length}
+                <span className="text-slate-400 bg-slate-900/80 px-1.5 py-0.5 rounded border border-slate-800/80">
+                  {activeChunkIndex + 1} / {timedChunks.length}
                 </span>
               </div>
 
-              {/* Spoken Active Sentence Text */}
+              {/* Spoken 3-5 Words Text */}
               <p
-                className="text-base sm:text-xl md:text-2xl font-bold text-white tracking-wide leading-relaxed drop-shadow-md selection:bg-amber-500/30 font-sans"
+                className="text-sm sm:text-lg md:text-xl font-bold text-white tracking-wide leading-snug drop-shadow-md selection:bg-amber-500/30 font-sans"
                 dir="ltr"
               >
-                {activeSentence.text}
+                {activeChunk.text}
               </p>
 
-              {/* Progress bar inside active sentence */}
-              <div className="mt-3.5 w-full h-1 bg-slate-800/80 rounded-full overflow-hidden">
+              {/* Progress bar inside active 3-5 words chunk */}
+              <div className="mt-1.5 w-full h-0.5 bg-slate-800/90 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-amber-500 via-amber-400 to-amber-200 transition-all duration-100"
-                  style={{ width: `${sentenceInnerProgress * 100}%` }}
+                  style={{ width: `${chunkInnerProgress * 100}%` }}
                 />
               </div>
             </div>
@@ -609,7 +624,7 @@ export function TimelinePlayer({
         )}
 
         {/* Bottom Floating Control Bar */}
-        <div className="absolute bottom-0 inset-x-0 p-4 bg-gradient-to-t from-black/90 via-black/50 to-transparent flex flex-col gap-3">
+        <div className="absolute bottom-0 inset-x-0 p-2.5 sm:p-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent flex flex-col gap-2 z-20">
           {/* Timeline scrub track */}
           <div className="relative w-full h-1.5 bg-slate-800/80 rounded-full overflow-hidden cursor-pointer group">
             <div
@@ -622,21 +637,21 @@ export function TimelinePlayer({
 
           {/* Controls Row */}
           <div className="flex items-center justify-between text-white">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <button
                 onClick={() => activeSceneIndex > 0 && onSceneChange(activeSceneIndex - 1)}
                 disabled={activeSceneIndex === 0}
-                className="p-2 hover:bg-white/10 rounded-lg disabled:opacity-30 transition-colors"
+                className="p-1.5 sm:p-2 hover:bg-white/10 rounded-lg disabled:opacity-30 transition-colors"
                 title="المشهد السابق"
               >
-                <SkipBack className="h-4 w-4" />
+                <SkipBack className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </button>
 
               <button
                 onClick={togglePlay}
-                className="p-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl font-bold transition-transform active:scale-95 shadow-md"
+                className="p-2 sm:p-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl font-bold transition-transform active:scale-95 shadow-md"
               >
-                {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5 ml-0.5" />}
+                {isPlaying ? <Pause className="h-4 w-4 sm:h-5 sm:w-5" /> : <Play className="h-4 w-4 sm:h-5 sm:w-5 ml-0.5" />}
               </button>
 
               <button
@@ -645,21 +660,21 @@ export function TimelinePlayer({
                 className="p-2 hover:bg-white/10 rounded-lg disabled:opacity-30 transition-colors"
                 title="المشهد التالي"
               >
-                <SkipForward className="h-4 w-4" />
+                <SkipForward className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </button>
 
-              <div className="h-4 w-px bg-slate-700 mx-1" />
+              <div className="h-4 w-px bg-slate-700 mx-0.5 sm:mx-1" />
 
               <button
                 onClick={() => setIsMuted(!isMuted)}
-                className="p-2 hover:bg-white/10 rounded-lg text-slate-300 transition-colors"
+                className="p-1.5 sm:p-2 hover:bg-white/10 rounded-lg text-slate-300 transition-colors"
               >
-                {isMuted ? <VolumeX className="h-4 w-4 text-red-400" /> : <Volume2 className="h-4 w-4" />}
+                {isMuted ? <VolumeX className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-red-400" /> : <Volume2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
               </button>
 
               <button
                 onClick={() => setShowCaptions(!showCaptions)}
-                className={`px-2.5 py-1 text-xs font-mono font-bold rounded-lg border transition-colors ${
+                className={`px-2 py-0.5 sm:px-2.5 sm:py-1 text-[11px] sm:text-xs font-mono font-bold rounded-lg border transition-colors ${
                   showCaptions
                     ? 'border-amber-400 text-amber-400 bg-amber-400/10 shadow-sm'
                     : 'border-slate-700 text-slate-400 hover:text-slate-200'
@@ -670,14 +685,14 @@ export function TimelinePlayer({
               </button>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 sm:gap-3">
               {/* Playback speed selector */}
-              <div className="flex items-center gap-1 bg-slate-900/80 p-1 rounded-lg border border-slate-700 text-xs">
+              <div className="flex items-center gap-0.5 sm:gap-1 bg-slate-900/80 p-0.5 sm:p-1 rounded-lg border border-slate-700 text-[10px] sm:text-xs">
                 {[1, 1.25, 1.5].map((speed) => (
                   <button
                     key={speed}
                     onClick={() => setPlaybackSpeed(speed)}
-                    className={`px-2 py-0.5 rounded font-mono ${
+                    className={`px-1.5 sm:px-2 py-0.5 rounded font-mono ${
                       playbackSpeed === speed
                         ? 'bg-amber-400 text-slate-950 font-bold'
                         : 'text-slate-400 hover:text-slate-200'
@@ -690,10 +705,10 @@ export function TimelinePlayer({
 
               <button
                 onClick={toggleFullscreen}
-                className="p-2 hover:bg-white/10 rounded-lg text-slate-300 transition-colors"
+                className="p-1.5 sm:p-2 hover:bg-white/10 rounded-lg text-slate-300 transition-colors"
                 title="شاشة كاملة"
               >
-                <Maximize2 className="h-4 w-4" />
+                <Maximize2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </button>
             </div>
           </div>
