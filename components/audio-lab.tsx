@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Scene } from '@/types/project';
-import { VOICE_CATALOG } from '@/lib/tts-engine';
+import { VOICE_CATALOG } from '@/lib/voice-catalog';
 import { saveAudioToDB, getAudioFromDB } from '@/lib/db';
 import {
   Volume2,

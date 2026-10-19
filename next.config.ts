@@ -20,6 +20,7 @@ const nextConfig: NextConfig = {
     ],
   },
   output: 'standalone',
+  serverExternalPackages: ['msedge-tts'],
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.

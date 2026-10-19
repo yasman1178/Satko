@@ -124,13 +124,53 @@ export default function Home() {
     }
   };
 
+  // Bulk update multiple scenes at once (e.g. from image matching)
+  const handleBulkUpdateScenes = (updatesMap: Map<string, Partial<Scene>>) => {
+    setProject((prev) => {
+      const updatedChapters = prev.chapters.map((ch) => ({
+        ...ch,
+        scenes: ch.scenes.map((sc) => {
+          const updates = updatesMap.get(sc.scene_id);
+          return updates ? { ...sc, ...updates } : sc;
+        }),
+      }));
+      return { ...prev, chapters: updatedChapters };
+    });
+  };
+
   // Load a new project (e.g. from JSON file or modal)
-  const handleProjectLoaded = (newProject: ProjectData) => {
-    setProject(newProject);
-    setActiveSceneIndex(0);
-    saveProjectToDB(newProject);
-    setSaveSuccessMsg('تم تحميل المشروع وتثبيته في الذاكرة بنجاح');
-    setTimeout(() => setSaveSuccessMsg(null), 3000);
+  const handleProjectLoaded = async (newProject: ProjectData) => {
+    try {
+      const audioMap = await getAllAudioFromDB();
+      const imageMap = await getAllImagesFromDB();
+
+      const mergedChapters = newProject.chapters.map((ch) => ({
+        ...ch,
+        scenes: ch.scenes.map((sc) => {
+          const cachedAudio = audioMap.get(sc.scene_id);
+          const cachedImage = imageMap.get(sc.image_filename);
+          return {
+            ...sc,
+            audio_url: cachedAudio?.url || sc.audio_url,
+            duration_seconds: cachedAudio?.duration || sc.duration_seconds,
+            audio_status: cachedAudio?.url ? 'ready' : sc.audio_status || 'idle',
+            image_url: cachedImage || sc.image_url,
+            image_status: cachedImage ? 'ready' : sc.image_status || 'missing',
+          };
+        }),
+      }));
+
+      const mergedProject = { ...newProject, chapters: mergedChapters };
+      setProject(mergedProject);
+      setActiveSceneIndex(0);
+      await saveProjectToDB(mergedProject);
+      setSaveSuccessMsg('تم تحميل المشروع ومطابقة الوسائط المحفوظة بنجاح');
+      setTimeout(() => setSaveSuccessMsg(null), 3000);
+    } catch {
+      setProject(newProject);
+      setActiveSceneIndex(0);
+      saveProjectToDB(newProject);
+    }
   };
 
   const scenes = project.chapters[0]?.scenes || [];
@@ -204,6 +244,7 @@ export default function Home() {
           <MediaStudio
             scenes={scenes}
             onUpdateScene={handleUpdateScene}
+            onBulkUpdateScenes={handleBulkUpdateScenes}
           />
         )}
 
