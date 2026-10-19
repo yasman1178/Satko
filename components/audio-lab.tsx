@@ -35,7 +35,7 @@ export function AudioLab({
   onVoiceChange,
   onScenesUpdated,
 }: AudioLabProps) {
-  const [speechRate, setSpeechRate] = useState<string>('+0%');
+  const [speechRate, setSpeechRate] = useState<string>('-20%');
   const [isBatchGenerating, setIsBatchGenerating] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [activePlayingId, setActivePlayingId] = useState<string | null>(null);
@@ -247,21 +247,33 @@ export function AudioLab({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
-              سرعة الإلقاء (Pacing Rate)
-            </label>
-            <div className="flex items-center gap-1.5 p-1 bg-slate-950 rounded-lg border border-slate-700">
-              {['-10%', '+0%', '+10%', '+15%'].map((rate) => (
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-medium text-slate-300">
+                سرعة الإلقاء (Pacing Rate)
+              </label>
+              <span className="text-[11px] font-mono text-amber-400 font-bold">
+                {speechRate === '-20%' ? '-20% (ماكيافيلي وقور)' : speechRate}
+              </span>
+            </div>
+            <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-lg border border-slate-700">
+              {[
+                { val: '-30%', label: '-30%' },
+                { val: '-20%', label: '-20% ★' },
+                { val: '-10%', label: '-10%' },
+                { val: '+0%', label: 'طبيعي' },
+                { val: '+10%', label: '+10%' },
+              ].map(({ val, label }) => (
                 <button
-                  key={rate}
-                  onClick={() => setSpeechRate(rate)}
+                  key={val}
+                  onClick={() => setSpeechRate(val)}
                   className={`flex-1 py-1 text-xs font-medium rounded transition-colors ${
-                    speechRate === rate
-                      ? 'bg-amber-400 text-slate-950 font-bold'
-                      : 'text-slate-400 hover:text-slate-200'
+                    speechRate === val
+                      ? 'bg-amber-400 text-slate-950 font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                   }`}
+                  title={val === '-20%' ? 'السرعة السيكولوجية الافتراضية (-20%)' : val}
                 >
-                  {rate === '+0%' ? 'طبيعي' : rate}
+                  {label}
                 </button>
               ))}
             </div>

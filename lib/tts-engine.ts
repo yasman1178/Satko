@@ -17,11 +17,11 @@ export const VOICE_CATALOG = [
 export async function synthesizeEdgeTTS(
   text: string,
   voice: string = 'en-GB-RyanNeural',
-  rate: string = '+0%',
+  rate: string = '-20%',
   pitch: string = '+0Hz'
 ): Promise<{ audioBuffer: Buffer; mimeType: string }> {
   // Normalize rate and pitch for SSML
-  const cleanRate = rate.includes('%') ? rate : '+0%';
+  const cleanRate = rate.includes('%') ? rate : '-20%';
   const cleanPitch = pitch.includes('Hz') ? pitch : '+0Hz';
 
   const tts = new MsEdgeTTS({ connectionTimeoutMs: 12000, synthesisTimeoutMs: 20000 });

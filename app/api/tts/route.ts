@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { text, voice = 'en-GB-RyanNeural', rate = '+0%', pitch = '+0Hz', scene_id } = body;
+    const { text, voice = 'en-GB-RyanNeural', rate = '-20%', pitch = '+0Hz', scene_id } = body;
 
     if (!text || typeof text !== 'string') {
       return NextResponse.json({ error: 'Text is required for TTS synthesis' }, { status: 400 });
