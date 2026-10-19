@@ -12,6 +12,7 @@ import {
   VolumeX,
   Clock,
   Layers,
+  Sliders,
 } from 'lucide-react';
 
 export interface TimedWordChunk {
@@ -46,7 +47,7 @@ export function splitTextIntoWordChunks(text: string): TimedWordChunk[] {
     const count = currentWords.length;
     const remainingWords = rawWords.length - 1 - i;
 
-    // Break when:
+    // Break condition:
     // - Reached 3+ words and hit a pause punctuation (and remaining is at least 2 words)
     // - Reached 4 words and remaining is at least 3 words
     // - Hit 5 words (strict maximum limit)
@@ -58,7 +59,6 @@ export function splitTextIntoWordChunks(text: string): TimedWordChunk[] {
       i === rawWords.length - 1;
 
     if (shouldBreak) {
-      // Avoid leaving an isolated single word at the end if we can merge it into current chunk
       if (remainingWords === 1 && count < 5) {
         continue;
       }
@@ -144,9 +144,12 @@ export function TimelinePlayer({
   const [sceneProgress, setSceneProgress] = useState(0); // 0 to 1 inside current scene
   const [loadedImages, setLoadedImages] = useState<Map<string, HTMLImageElement>>(new Map());
 
+  // Subtitle timing calibration offset (default +350ms advance to eliminate audio lag)
+  const [subtitleOffset, setSubtitleOffset] = useState<number>(0.35);
+  const [isCalibrationOpen, setIsCalibrationOpen] = useState<boolean>(false);
+
   const currentScene = scenes[activeSceneIndex] || scenes[0];
   const animationFrameRef = useRef<number | null>(null);
-  const sceneStartTimeRef = useRef<number>(0);
 
   // Synchronized active word chunk (3 to 5 words) calculations
   const timedChunks = useMemo(
@@ -154,14 +157,21 @@ export function TimelinePlayer({
     [currentScene?.narration_text]
   );
 
+  // Calculate calibrated progress with the user-defined advance offset
+  const calibratedProgress = useMemo(() => {
+    const dur = currentScene?.duration_seconds || 4;
+    const offsetFraction = subtitleOffset / (dur || 1);
+    return Math.min(1, Math.max(0, sceneProgress + offsetFraction));
+  }, [sceneProgress, subtitleOffset, currentScene?.duration_seconds]);
+
   const activeChunkIndex = useMemo(() => {
     if (timedChunks.length === 0) return 0;
     const idx = timedChunks.findIndex(
-      (s) => sceneProgress >= s.startProgress && sceneProgress < s.endProgress
+      (s) => calibratedProgress >= s.startProgress && calibratedProgress < s.endProgress
     );
     if (idx !== -1) return idx;
-    return sceneProgress >= 1 ? timedChunks.length - 1 : 0;
-  }, [timedChunks, sceneProgress]);
+    return calibratedProgress >= 1 ? timedChunks.length - 1 : 0;
+  }, [timedChunks, calibratedProgress]);
 
   const activeChunk = useMemo(() => {
     return (
@@ -178,7 +188,7 @@ export function TimelinePlayer({
   const chunkSpan = Math.max(0.001, activeChunk.endProgress - activeChunk.startProgress);
   const chunkInnerProgress = Math.min(
     1,
-    Math.max(0, (sceneProgress - activeChunk.startProgress) / chunkSpan)
+    Math.max(0, (calibratedProgress - activeChunk.startProgress) / chunkSpan)
   );
 
   // Calculate total timeline duration
@@ -211,8 +221,6 @@ export function TimelinePlayer({
   useEffect(() => {
     if (!currentScene) return;
 
-    sceneStartTimeRef.current = performance.now();
-
     if (audioRef.current) {
       audioRef.current.pause();
       if (currentScene.audio_url) {
@@ -226,7 +234,7 @@ export function TimelinePlayer({
     }
   }, [activeSceneIndex, currentScene, isMuted, isPlaying, playbackSpeed]);
 
-  // Main Canvas render loop with Ken Burns motion, MachinaMind branding & 3-5 word subtitle rendering
+  // Main Canvas render loop with Ken Burns motion, MachinaMind branding & 1/3-size subtitles
   const renderFrame = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -374,67 +382,66 @@ export function TimelinePlayer({
     ctx.restore();
 
     // ─────────────────────────────────────────────────────────────
-    // Active 3-5 Word Phrase Subtitles on Canvas
+    // Active 3-5 Word Phrase Subtitles on Canvas (1/3 of Previous Size)
     // ─────────────────────────────────────────────────────────────
     if (showCaptions && activeChunk?.text) {
-      // Bottom cinematic gradient scrim
-      const textScrim = ctx.createLinearGradient(0, height - 200, 0, height);
+      // Bottom subtle gradient scrim
+      const textScrim = ctx.createLinearGradient(0, height - 160, 0, height);
       textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      textScrim.addColorStop(0.4, 'rgba(0, 0, 0, 0.7)');
-      textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.95)');
+      textScrim.addColorStop(0.5, 'rgba(0, 0, 0, 0.65)');
+      textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.9)');
       ctx.fillStyle = textScrim;
-      ctx.fillRect(0, height - 200, width, 200);
+      ctx.fillRect(0, height - 160, width, 160);
 
-      // Compact Subtitle card container (proportional for 3-5 words)
-      const subCardW = Math.min(1000, width * 0.6);
-      const subCardH = 92;
+      // Compact 1/3-size Subtitle Capsule on canvas
+      const subCardW = Math.min(480, width * 0.28);
+      const subCardH = 46;
       const subCardX = (width - subCardW) / 2;
-      const subCardY = height - 165;
+      const subCardY = height - 110;
 
       ctx.save();
       ctx.fillStyle = 'rgba(9, 13, 22, 0.88)';
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
       ctx.lineWidth = 1.5;
-      drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, 14);
+      drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, 23);
       ctx.fill();
       ctx.stroke();
 
-      // Top caption indicator: MachinaMind · [X/Y]
+      // Number badge circle
       ctx.fillStyle = '#F59E0B';
-      ctx.font = 'bold 15px monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillText(
-        `MachinaMind · [${activeChunkIndex + 1}/${timedChunks.length}]`,
-        width / 2,
-        subCardY + 12
-      );
+      ctx.beginPath();
+      ctx.arc(subCardX + 24, subCardY + 23, 11, 0, Math.PI * 2);
+      ctx.fill();
 
-      // Active 3-5 words text (punchy, high contrast with golden glow)
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 36px "Plus Jakarta Sans", sans-serif';
+      ctx.fillStyle = '#090D16';
+      ctx.font = 'bold 11px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.shadowColor = 'rgba(245, 158, 11, 0.45)';
-      ctx.shadowBlur = 12;
-      ctx.fillText(activeChunk.text.trim(), width / 2, subCardY + 48);
+      ctx.fillText(`${activeChunkIndex + 1}`, subCardX + 24, subCardY + 23);
 
-      // Subtle active chunk reading progress bar
-      const progBarW = subCardW - 60;
-      const progBarH = 3;
-      const progBarX = (width - progBarW) / 2;
-      const progBarY = subCardY + subCardH - 12;
+      // Active 3-5 words text (sharp, compact)
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 20px "Plus Jakarta Sans", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(245, 158, 11, 0.4)';
+      ctx.shadowBlur = 8;
+      ctx.fillText(activeChunk.text.trim(), subCardX + subCardW / 2 + 10, subCardY + 23);
+
+      // Hairline progress bar at bottom of capsule
+      const progBarW = subCardW - 40;
+      const progBarH = 2;
+      const progBarX = subCardX + 20;
+      const progBarY = subCardY + subCardH - 4;
 
       ctx.shadowBlur = 0;
       ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-      drawRoundRect(ctx, progBarX, progBarY, progBarW, progBarH, 1.5);
-      ctx.fill();
+      ctx.fillRect(progBarX, progBarY, progBarW, progBarH);
 
       ctx.fillStyle = '#F59E0B';
       const filledW = progBarW * chunkInnerProgress;
       if (filledW > 0) {
-        drawRoundRect(ctx, progBarX, progBarY, filledW, progBarH, 1.5);
-        ctx.fill();
+        ctx.fillRect(progBarX, progBarY, filledW, progBarH);
       }
 
       ctx.restore();
@@ -446,36 +453,41 @@ export function TimelinePlayer({
     showCaptions,
     activeChunk,
     activeChunkIndex,
-    timedChunks.length,
     chunkInnerProgress,
   ]);
 
-  // Main animation / timing tick
+  // Main animation / timing tick with real-time 60fps audio clock sync
   useEffect(() => {
     let lastTime = performance.now();
 
     const loop = (currentTime: number) => {
       if (isPlaying) {
-        const durationSec = (currentScene?.duration_seconds || 4) / playbackSpeed;
-        const deltaSec = (currentTime - lastTime) / 1000;
-        lastTime = currentTime;
-
-        setSceneProgress((prev) => {
-          const next = prev + deltaSec / durationSec;
-          if (next >= 1) {
-            // Move to next scene if available
-            if (activeSceneIndex < scenes.length - 1) {
-              onSceneChange(activeSceneIndex + 1);
-            } else {
-              setIsPlaying(false);
-            }
-            return 0;
+        // High-precision 60fps query of exact audio currentTime to eliminate polling delay
+        if (audioRef.current && currentScene?.audio_url && !audioRef.current.paused) {
+          const cur = audioRef.current.currentTime;
+          const dur = audioRef.current.duration || currentScene.duration_seconds || 4;
+          if (dur > 0) {
+            setSceneProgress(Math.min(1, cur / dur));
           }
-          return next;
-        });
-      } else {
-        lastTime = currentTime;
+        } else {
+          // Fallback to frame delta when no audio is loaded
+          const durationSec = (currentScene?.duration_seconds || 4) / playbackSpeed;
+          const deltaSec = (currentTime - lastTime) / 1000;
+          setSceneProgress((prev) => {
+            const next = prev + deltaSec / durationSec;
+            if (next >= 1) {
+              if (activeSceneIndex < scenes.length - 1) {
+                onSceneChange(activeSceneIndex + 1);
+              } else {
+                setIsPlaying(false);
+              }
+              return 0;
+            }
+            return next;
+          });
+        }
       }
+      lastTime = currentTime;
 
       renderFrame();
       animationFrameRef.current = requestAnimationFrame(loop);
@@ -589,33 +601,26 @@ export function TimelinePlayer({
           </div>
         </div>
 
-        {/* Active 3-5 Words Dynamic Subtitle Overlay (Compact, Above Controls, Non-Blocking) */}
+        {/* Active 3-5 Words Dynamic Subtitle Capsule (1/3 of Previous Size, Non-Intrusive) */}
         {showCaptions && activeChunk?.text && (
-          <div className="absolute bottom-14 sm:bottom-16 md:bottom-20 inset-x-3 sm:inset-x-8 flex justify-center pointer-events-none z-10">
-            <div className="max-w-md sm:max-w-xl w-auto min-w-[240px] rounded-xl bg-slate-950/92 backdrop-blur-md border border-amber-500/35 px-3.5 py-1.5 sm:px-5 sm:py-2.5 shadow-2xl relative overflow-hidden transition-all duration-150 text-center">
-              {/* Header badge with current 3-5 word chunk index */}
-              <div className="flex items-center justify-between text-[9px] sm:text-[10px] font-mono text-amber-400/90 mb-1">
-                <span className="font-bold flex items-center gap-1">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-                  <span>MachinaMind</span>
-                </span>
-                <span className="text-slate-400 bg-slate-900/80 px-1.5 py-0.5 rounded border border-slate-800/80">
-                  {activeChunkIndex + 1} / {timedChunks.length}
-                </span>
-              </div>
+          <div className="absolute bottom-11 sm:bottom-14 inset-x-2 flex justify-center pointer-events-none z-10">
+            <div className="max-w-[280px] sm:max-w-[340px] w-auto rounded-full bg-slate-950/92 backdrop-blur-md border border-amber-500/40 px-3 py-1 sm:px-4 sm:py-1.5 shadow-xl relative overflow-hidden transition-all duration-100 flex items-center gap-2">
+              <span className="flex-shrink-0 text-[9px] font-mono font-bold text-amber-400 bg-amber-500/15 px-1.5 py-0.5 rounded-full">
+                {activeChunkIndex + 1}/{timedChunks.length}
+              </span>
 
-              {/* Spoken 3-5 Words Text */}
+              {/* Spoken 3-5 Words Text (Compact & Ultra-Sharp) */}
               <p
-                className="text-sm sm:text-lg md:text-xl font-bold text-white tracking-wide leading-snug drop-shadow-md selection:bg-amber-500/30 font-sans"
+                className="text-xs sm:text-sm font-bold text-white tracking-wide truncate leading-tight drop-shadow font-sans"
                 dir="ltr"
               >
                 {activeChunk.text}
               </p>
 
-              {/* Progress bar inside active 3-5 words chunk */}
-              <div className="mt-1.5 w-full h-0.5 bg-slate-800/90 rounded-full overflow-hidden">
+              {/* Hairline Progress Underline */}
+              <div className="absolute bottom-0 inset-x-0 h-[2px] bg-slate-800">
                 <div
-                  className="h-full bg-gradient-to-r from-amber-500 via-amber-400 to-amber-200 transition-all duration-100"
+                  className="h-full bg-gradient-to-r from-amber-500 to-amber-300 transition-all duration-100"
                   style={{ width: `${chunkInnerProgress * 100}%` }}
                 />
               </div>
@@ -683,6 +688,85 @@ export function TimelinePlayer({
               >
                 CC
               </button>
+
+              {/* Subtitle Sync Calibration Button & Popover */}
+              <div className="relative">
+                <button
+                  onClick={() => setIsCalibrationOpen(!isCalibrationOpen)}
+                  className={`flex items-center gap-1 px-1.5 py-0.5 sm:px-2 sm:py-1 text-[10px] sm:text-xs font-mono rounded-lg border transition-colors ${
+                    isCalibrationOpen || subtitleOffset !== 0.35
+                      ? 'border-amber-400 text-amber-300 bg-amber-500/15'
+                      : 'border-slate-700 text-slate-400 hover:text-slate-200'
+                  }`}
+                  title="معايرة توقيت الترجمة (مزامنة الصوت)"
+                >
+                  <Sliders className="h-3 w-3" />
+                  <span>{subtitleOffset >= 0 ? `+${Math.round(subtitleOffset * 1000)}ms` : `${Math.round(subtitleOffset * 1000)}ms`}</span>
+                </button>
+
+                {/* Calibration Dropdown / Popover */}
+                {isCalibrationOpen && (
+                  <div className="absolute bottom-10 left-0 sm:left-auto sm:right-0 w-64 sm:w-72 rounded-xl bg-slate-950/95 backdrop-blur-xl border border-slate-700 p-3 shadow-2xl z-50 text-slate-200 text-xs space-y-2.5">
+                    <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+                      <span className="font-bold text-amber-400 flex items-center gap-1.5 text-[11px]">
+                        <Sliders className="h-3 w-3" />
+                        <span>معايرة تزامن الكلمات</span>
+                      </span>
+                      <button
+                        onClick={() => setSubtitleOffset(0.35)}
+                        className="text-[10px] text-slate-400 hover:text-amber-400 font-mono transition-colors"
+                        title="إعادة التعيين إلى +350ms"
+                      >
+                        افتراضي (+350ms)
+                      </button>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-[11px] mb-1 font-mono">
+                        <span className="text-slate-400">إزاحة التوقيت:</span>
+                        <span className="text-amber-300 font-bold">
+                          {subtitleOffset > 0
+                            ? `تقديم +${Math.round(subtitleOffset * 1000)}ms`
+                            : subtitleOffset < 0
+                            ? `تأخير ${Math.round(subtitleOffset * 1000)}ms`
+                            : '0ms (بدون إزاحة)'}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-0.4"
+                        max="0.8"
+                        step="0.05"
+                        value={subtitleOffset}
+                        onChange={(e) => setSubtitleOffset(parseFloat(e.target.value))}
+                        className="w-full accent-amber-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+                      />
+                    </div>
+
+                    {/* Quick Presets */}
+                    <div className="grid grid-cols-4 gap-1 text-[10px] font-mono">
+                      {[
+                        { val: 0.0, label: '0ms' },
+                        { val: 0.2, label: '+200' },
+                        { val: 0.35, label: '+350★' },
+                        { val: 0.5, label: '+500' },
+                      ].map((preset) => (
+                        <button
+                          key={preset.val}
+                          onClick={() => setSubtitleOffset(preset.val)}
+                          className={`py-0.5 rounded border transition-colors ${
+                            subtitleOffset === preset.val
+                              ? 'bg-amber-400 text-slate-950 font-bold border-amber-400'
+                              : 'border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-3">
