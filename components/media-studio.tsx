@@ -93,7 +93,8 @@ export function MediaStudio({ scenes, onUpdateScene, onBulkUpdateScenes }: Media
   const handleIncomingFiles = (fileList: FileList | File[]) => {
     const files = Array.from(fileList).filter((f) => f.type.startsWith('image/') || /\.(png|jpg|jpeg|webp|jfif|avif)$/i.test(f.name));
     if (files.length === 0) {
-      alert('يرجى اختيار ملفات صور صالحة (PNG أو JPG أو WebP)');
+      setUploadFeedback('يرجى اختيار ملفات صور صالحة (PNG أو JPG أو WebP)');
+      setTimeout(() => setUploadFeedback(null), 4000);
       return;
     }
 

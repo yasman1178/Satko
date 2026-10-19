@@ -92,8 +92,8 @@ export function AIMemoryPanel({
       try {
         const parsed = JSON.parse(event.target?.result as string);
         onImportProject(parsed);
-      } catch (err) {
-        alert('الملف المختار غير صالح');
+      } catch {
+        setAnalysisError('الملف المختار ليس بصيغة JSON صالحة');
       }
     };
     reader.readAsText(file);
@@ -264,7 +264,6 @@ export function AIMemoryPanel({
                     <button
                       onClick={() => {
                         onUpdateScene(flag.scene_id, { narration_text: flag.suggestion });
-                        alert(`تم تحديث نص المشهد ${flag.scene_id} بالصيغة المقترحة`);
                       }}
                       className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] transition-colors"
                     >

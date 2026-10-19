@@ -67,7 +67,6 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
       }
     } catch (err) {
       console.error('Error generating publish pack:', err);
-      alert('تعذر توليد الحزمة بالذكاء الاصطناعي');
     } finally {
       setIsGeneratingPack(false);
     }

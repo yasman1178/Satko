@@ -2,8 +2,8 @@ import { ProjectData } from '@/types/project';
 
 export const SAMPLE_CHAPTER_001: ProjectData = {
   id: 'chapter-001-phantom-alteration',
-  created_at: new Date().toISOString(),
-  updated_at: new Date().toISOString(),
+  created_at: '2026-10-19T14:00:00.000Z',
+  updated_at: '2026-10-19T14:00:00.000Z',
   project: {
     title: "How Manipulators Plant Doubt in Your Memory to Destroy Your Self-Trust",
     language: "en",
