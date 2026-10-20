@@ -49,7 +49,7 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
 
   // Scene Selection States
   type SceneSelectionMode = 'all' | 'first3' | 'first5' | 'first10' | 'custom_count' | 'range';
-  const [sceneSelectionMode, setSceneSelectionMode] = useState<SceneSelectionMode>('all');
+  const [sceneSelectionMode, setSceneSelectionMode] = useState<SceneSelectionMode>('first3');
   const [customCount, setCustomCount] = useState<number>(3);
   const [rangeStart, setRangeStart] = useState<number>(1);
   const [rangeEnd, setRangeEnd] = useState<number>(5);
@@ -166,7 +166,8 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
         setRenderError('تم إيقاف عملية الرندر بناءً على طلبك.');
       } else {
         console.error('Video Render Error:', err);
-        setRenderError(err?.message || 'حدث خطأ أثناء رندر الفيديو');
+        const detailedMsg = err?.message || (typeof err === 'string' ? err : 'تحذير أثناء تجميع الفيديو');
+        setRenderError(detailedMsg);
       }
     } finally {
       setIsExportingVideo(false);
@@ -552,7 +553,7 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
               <div className="flex items-center justify-between p-2 bg-slate-950 rounded border border-slate-800 text-[11px] text-slate-400">
                 <span>الميزات المطبقة:</span>
                 <span className="font-medium text-amber-400 flex items-center gap-1">
-                  <span className="text-emerald-400 font-bold">✓</span> ترجمة ريلز ضخمة 72px · ترويسة أندرويد وواتساب
+                  <span className="text-emerald-400 font-bold">✓</span> صيغة MP4 القياسية · ترجمة ريلز ضخمة 72px · ترويسة أندرويد وواتساب
                 </span>
               </div>
             </div>

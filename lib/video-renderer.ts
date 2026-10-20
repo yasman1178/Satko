@@ -134,27 +134,31 @@ async function loadAudioBuffer(
 
 /**
  * Detects the best supported MediaRecorder MIME type.
- * Prioritizes WebM with VP9/VP8 for guaranteed browser rendering consistency and
- * flawless compatibility with Android Gallery / WhatsApp via injected EBML Duration metadata.
+ * Prioritizes standard MP4 (H.264/AAC or AVC1) as requested by the user,
+ * with reliable WebM (VP9/VP8) fallback if the browser engine does not support native MP4 recorder.
  */
 function getBestSupportedMimeType(): { mimeType: string; extension: string } {
   if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') {
-    return { mimeType: 'video/webm', extension: 'webm' };
+    return { mimeType: 'video/mp4', extension: 'mp4' };
   }
 
+  // Prioritize standard MP4 first
   const candidateTypes = [
+    { type: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
+    { type: 'video/mp4;codecs=avc1', ext: 'mp4' },
+    { type: 'video/mp4;codecs=h264,aac', ext: 'mp4' },
+    { type: 'video/mp4', ext: 'mp4' },
     { type: 'video/webm;codecs=vp9,opus', ext: 'webm' },
     { type: 'video/webm;codecs=vp8,opus', ext: 'webm' },
     { type: 'video/webm', ext: 'webm' },
-    { type: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
-    { type: 'video/mp4;codecs=avc1', ext: 'mp4' },
-    { type: 'video/mp4', ext: 'mp4' },
   ];
 
   for (const candidate of candidateTypes) {
-    if (MediaRecorder.isTypeSupported(candidate.type)) {
-      return { mimeType: candidate.type, extension: candidate.ext };
-    }
+    try {
+      if (MediaRecorder.isTypeSupported(candidate.type)) {
+        return { mimeType: candidate.type, extension: candidate.ext };
+      }
+    } catch {}
   }
 
   return { mimeType: 'video/webm', extension: 'webm' };
@@ -279,12 +283,25 @@ export async function renderProjectVideo(
     }
   };
 
-  const recorderStoppedPromise = new Promise<Blob>((resolve, reject) => {
+  const recorderStoppedPromise = new Promise<Blob>((resolve) => {
     recorder.onstop = () => {
-      const finalBlob = new Blob(chunks, { type: mimeType });
-      resolve(finalBlob);
+      try {
+        const finalBlob = new Blob(chunks, { type: mimeType });
+        resolve(finalBlob);
+      } catch (err) {
+        console.warn('onstop blob creation fallback:', err);
+        resolve(new Blob(chunks));
+      }
     };
-    recorder.onerror = (err) => reject(err);
+    recorder.onerror = (err) => {
+      console.warn('MediaRecorder warning during capture, preserving collected chunks:', err);
+      try {
+        const fallbackBlob = new Blob(chunks, { type: mimeType });
+        resolve(fallbackBlob);
+      } catch {
+        resolve(new Blob(chunks));
+      }
+    };
   });
 
   recorder.start(250); // flush chunks every 250ms

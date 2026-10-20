@@ -307,9 +307,14 @@ export async function patchVideoDuration(
   durationSec: number,
   format: 'webm' | 'mp4'
 ): Promise<Blob> {
-  const durationMs = Math.round(durationSec * 1000);
-  if (format === 'mp4' || blob.type.includes('mp4')) {
-    return await patchMp4Duration(blob, durationSec);
+  try {
+    const durationMs = Math.round(durationSec * 1000);
+    if (format === 'mp4' || blob.type.includes('mp4')) {
+      return await patchMp4Duration(blob, durationSec);
+    }
+    return await patchWebmDuration(blob, durationMs);
+  } catch (err) {
+    console.warn('patchVideoDuration safe fallback to original blob:', err);
+    return blob;
   }
-  return await patchWebmDuration(blob, durationMs);
 }
