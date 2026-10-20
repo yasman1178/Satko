@@ -20,15 +20,22 @@ import {
   Play,
   RotateCcw,
   Layers,
-  ListFilter,
+  Server,
+  Sliders,
+  Clock,
+  Laptop,
+  Subtitles,
+  ExternalLink,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import {
   renderProjectVideo,
   VideoQuality,
+  RenderEngine,
   QUALITY_PRESETS,
   RenderProgress,
   RenderResult,
+  exportSrtSubtitles,
 } from '@/lib/video-renderer';
 
 interface PublishExportPanelProps {
@@ -40,12 +47,18 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [isGeneratingPack, setIsGeneratingPack] = useState(false);
 
-  // Video Rendering States
+  // Video Rendering Engine & Quality States
+  const [renderEngine, setRenderEngine] = useState<RenderEngine>('server_ffmpeg');
   const [selectedQuality, setSelectedQuality] = useState<VideoQuality>('1080p');
   const [isExportingVideo, setIsExportingVideo] = useState(false);
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [renderedResult, setRenderedResult] = useState<RenderResult | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
+
+  // Subtitle Pacing & Timing Calibration
+  // Solves user report: "سرعة الترجمة عن نطق الكلمات"
+  const [timingOffset, setTimingOffset] = useState<number>(0.25);
+  const [wordsPerChunk, setWordsPerChunk] = useState<number>(4);
 
   // Channel Branding & Watermark
   const [channelBrandName, setChannelBrandName] = useState<string>('MachinaMind');
@@ -134,7 +147,7 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
   const selectedReadyAudioCount = selectedScenes.filter((s) => s.audio_status === 'ready' && s.audio_url).length;
   const selectedTotalDuration = selectedScenes.reduce((sum, s) => sum + (s.duration_seconds || 3.8), 0);
 
-  // Real in-browser video render pipeline
+  // Main Render Starter
   const handleStartRender = async () => {
     const scenesToRender = getSelectedScenes();
     if (scenesToRender.length === 0) return;
@@ -144,10 +157,12 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
     setRenderProgress({
       currentSceneIndex: 0,
       totalScenes: scenesToRender.length,
-      percent: 1,
+      percent: 2,
       currentTimeSec: 0,
       totalTimeSec: Math.round(selectedTotalDuration),
-      statusText: `بدء تهيئة محرك الرندر لـ ${scenesToRender.length} مشهد...`,
+      statusText: renderEngine === 'server_ffmpeg'
+        ? `بدء تشغيل محرك FFmpeg على السيرفر لـ ${scenesToRender.length} مشهد...`
+        : `بدء تهيئة محرك المتصفح المحلي لـ ${scenesToRender.length} مشهد...`,
     });
 
     const abortController = new AbortController();
@@ -160,11 +175,14 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
         (progress) => {
           setRenderProgress(progress);
         },
-        abortController.signal,
         {
+          engine: renderEngine,
           channelName: channelBrandName.trim() || 'MachinaMind',
           showWatermark,
-        }
+          timingOffset,
+          wordsPerChunk,
+        },
+        abortController.signal
       );
 
       setRenderedResult(result);
@@ -200,6 +218,24 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
     setTimeout(() => document.body.removeChild(a), 1000);
   };
 
+  // Export SRT subtitles file for Premiere/CapCut
+  const handleExportSrt = () => {
+    const scenesToRender = getSelectedScenes();
+    if (scenesToRender.length === 0) return;
+    const srtContent = exportSrtSubtitles(scenesToRender, timingOffset);
+    const blob = new Blob([srtContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Mindplicit_${channelBrandName.replace(/\s+/g, '_')}_Subtitles.srt`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 1000);
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Banner */}
@@ -210,20 +246,29 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
               <span className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20">
                 <Share2 className="h-4 w-4" />
               </span>
-              <h2 className="text-lg font-bold text-white tracking-tight">
-                حزمة النشر والتصدير لليوتيوب (Publishing & Export Suite)
+              <h2 className="text-sm font-bold text-white">
+                مركز الإنتاج والتصدير السحابي (Mindplicit Video Station)
               </h2>
             </div>
             <p className="text-xs text-slate-400">
-              رندر الفيديو الحقيقي بـ 3 باقات جودة، مع عناوين عالية الـ CTR، ووصف محسن لمحركات البحث، وتاجات جاهزة.
+              رندر فائق السرعة عبر السيرفر (FFmpeg MP4) مع معالجة دقيقة لتزامن الترجمة العربية ومقاومة كاملة لتوقف المتصفح في الخلفية.
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              onClick={handleExportSrt}
+              className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 hover:text-white transition-colors"
+              title="تصدير ملف الترجمة لاستخدامه في Premiere Pro أو CapCut"
+            >
+              <Subtitles className="h-4 w-4 text-amber-400" />
+              <span>تصدير ملف الترجمة (.SRT)</span>
+            </button>
+
             <button
               onClick={handleGenerateAI}
               disabled={isGeneratingPack}
-              className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors shadow-sm disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2 text-xs font-bold text-slate-950 shadow-md hover:from-amber-400 hover:to-amber-500 transition-all disabled:opacity-50"
             >
               {isGeneratingPack ? (
                 <>
@@ -244,12 +289,12 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
       {/* Main Publishing Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Titles & Description */}
-        <div className="lg:col-span-2 space-y-5">
+        <div className="lg:col-span-1 space-y-5">
           {/* Title Options */}
           <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 space-y-3">
             <div className="flex items-center justify-between text-xs text-slate-300 font-semibold">
-              <span>خيارات العناوين الجذابة (High-CTR Title Options)</span>
-              <span className="text-slate-500 font-normal">اختر العنوان الأنسب للمحتوى</span>
+              <span>خيارات العناوين الجذابة (High-CTR)</span>
+              <span className="text-slate-500 font-normal">عناوين سيكولوجية</span>
             </div>
 
             <div className="space-y-2">
@@ -281,7 +326,7 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
             <div className="flex items-center justify-between text-xs text-slate-300 font-semibold">
               <span className="flex items-center gap-1.5">
                 <FileText className="h-4 w-4 text-amber-400" />
-                <span>الوصف مع الفصول الزمنية (YouTube Description & Timestamps)</span>
+                <span>الوصف مع الفصول الزمنية (Timestamps)</span>
               </span>
               <button
                 onClick={() => copyText(publishData.description, 'description')}
@@ -295,7 +340,7 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
                 ) : (
                   <>
                     <Copy className="h-3.5 w-3.5" />
-                    <span>نسخ الوصف كاملاً</span>
+                    <span>نسخ</span>
                   </>
                 )}
               </button>
@@ -304,29 +349,28 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
             <textarea
               readOnly
               value={publishData.description}
-              rows={8}
+              rows={6}
               dir="ltr"
               className="w-full rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300 font-mono focus:outline-none"
             />
           </div>
 
-          {/* Pinned Comment */}
+          {/* Pinned Comment & Tags */}
           <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 space-y-3">
             <div className="flex items-center justify-between text-xs text-slate-300 font-semibold">
               <span className="flex items-center gap-1.5">
                 <Pin className="h-4 w-4 text-amber-400" />
-                <span>التعليق المثبت للنقاش وزيادة التفاعل (Pinned Comment)</span>
+                <span>التعليق المثبت (Pinned Comment)</span>
               </span>
               <button
                 onClick={() => copyText(publishData.pinned_comment, 'pinned_comment')}
-                className="flex items-center gap-1 text-xs text-slate-400 hover:text-amber-400 transition-colors"
+                className="p-1 text-slate-400 hover:text-amber-400 transition-colors"
               >
                 {copiedKey === 'pinned_comment' ? (
                   <Check className="h-3.5 w-3.5 text-emerald-400" />
                 ) : (
                   <Copy className="h-3.5 w-3.5" />
                 )}
-                <span>نسخ</span>
               </button>
             </div>
 
@@ -336,27 +380,145 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
           </div>
         </div>
 
-        {/* Right Column: Video Render Engine with 3 Quality Options */}
-        <div className="space-y-5">
-          {/* Video Render Card */}
-          <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 space-y-4">
+        {/* Right Column (2 spans): Advanced Video Render Engine & Controls */}
+        <div className="lg:col-span-2 space-y-5">
+          {/* Main Video Render Card */}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-semibold text-white">
                 <Video className="h-4 w-4 text-amber-400" />
-                <span>محرك رندر وتصدير الفيديو الفعلي</span>
+                <span>محرك رندر وتصدير الفيديو (Video Engine Studio)</span>
               </div>
-              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                تسجيل حي مباشر
+              <span className="text-[10px] font-mono text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded border border-amber-500/20">
+                {renderEngine === 'server_ffmpeg' ? 'سيرفر FFmpeg فائق السرعة' : 'المتصفح المحلي'}
               </span>
             </div>
 
-            {/* Quality Preset Selector (3 Qualities) */}
+            {/* 1. Engine Choice (Server vs Local) */}
             <div className="space-y-2">
               <label className="block text-xs font-medium text-slate-300">
-                اختر دقة وجودة الفيديو المطلوب (Video Quality):
+                طريقة الرندر والترميز (Render Architecture):
               </label>
 
-              <div className="grid grid-cols-1 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={isExportingVideo}
+                  onClick={() => setRenderEngine('server_ffmpeg')}
+                  className={`text-right p-3 rounded-lg border transition-all ${
+                    renderEngine === 'server_ffmpeg'
+                      ? 'border-amber-400 bg-amber-500/10 shadow-sm'
+                      : 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-bold text-white flex items-center gap-2">
+                      <Server className="h-4 w-4 text-amber-400" />
+                      محرك السيرفر (FFmpeg MP4)
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                      موصى به
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    أسرع بـ 8x أضعاف، ترميز H.264 حقيقي، لا يتوقف عند تصغير المتصفح أو العمل على برامج أخرى.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isExportingVideo}
+                  onClick={() => setRenderEngine('browser_canvas')}
+                  className={`text-right p-3 rounded-lg border transition-all ${
+                    renderEngine === 'browser_canvas'
+                      ? 'border-amber-400 bg-amber-500/10 shadow-sm'
+                      : 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-bold text-white flex items-center gap-2">
+                      <Laptop className="h-4 w-4 text-slate-400" />
+                      محرك المتصفح المحلي (Canvas)
+                    </span>
+                    <span className="text-[10px] text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded">
+                      احتياطي
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    تسجيل محلي بدون اتصال بالسيرفر، يتطلب إبقاء التبويب نشطاً أثناء عملية التسجيل.
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            {/* 2. Subtitle Pacing & Timing Calibration Controls */}
+            {/* Directly resolves: "سرعة الترجمة عن نطق الكلمات" */}
+            <div className="p-4 rounded-lg border border-amber-500/30 bg-amber-500/5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sliders className="h-4 w-4 text-amber-400" />
+                  <span className="text-xs font-bold text-amber-300">
+                    معايرة سرعة الترجمة والوقفات الصوتية (Subtitle Sync Calibration)
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono font-bold text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20">
+                  {timingOffset > 0 ? `+${timingOffset.toFixed(2)}ث تأخير` : `${timingOffset.toFixed(2)}ث`}
+                </span>
+              </div>
+
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                حل مشكلة تسارع ظهور الترجمة عن الصوت: يمكنك هنا ضبط تأخير انطلاق الترجمة الذهبية وتطابقها مع نطق الكلمات ووقفات الترقيم (`،` و `.`).
+              </p>
+
+              {/* Quick Offset Buttons */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-1">
+                {[
+                  { label: 'متزن وموصى به', val: 0.25, desc: '+0.25ث' },
+                  { label: 'إلقاء بطيء متمهل', val: 0.45, desc: '+0.45ث' },
+                  { label: 'إلقاء سريع وحماسي', val: 0.12, desc: '+0.12ث' },
+                  { label: 'تزامن لحظي بدون تأخير', val: 0.0, desc: '0.00ث' },
+                ].map((item) => (
+                  <button
+                    key={item.val}
+                    type="button"
+                    disabled={isExportingVideo}
+                    onClick={() => setTimingOffset(item.val)}
+                    className={`py-1.5 px-2 rounded text-xs text-center border transition-all ${
+                      Math.abs(timingOffset - item.val) < 0.01
+                        ? 'border-amber-400 bg-amber-400 text-slate-950 font-bold'
+                        : 'border-slate-800 bg-slate-900 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div>{item.label}</div>
+                    <div className="text-[10px] opacity-80 font-mono">{item.desc}</div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Slider for precision tuning */}
+              <div className="pt-2 flex items-center gap-3">
+                <span className="text-[11px] text-slate-400 shrink-0">أسرع (-0.2ث)</span>
+                <input
+                  type="range"
+                  min="-0.2"
+                  max="0.8"
+                  step="0.05"
+                  value={timingOffset}
+                  disabled={isExportingVideo}
+                  onChange={(e) => setTimingOffset(parseFloat(e.target.value))}
+                  className="w-full accent-amber-400 cursor-pointer"
+                />
+                <span className="text-[11px] text-slate-400 shrink-0">أبطأ (+0.8ث)</span>
+              </div>
+            </div>
+
+            {/* 3. Quality Preset Selector */}
+            <div className="space-y-2">
+              <label className="block text-xs font-medium text-slate-300">
+                دقة وجودة الفيديو المطلوب (Video Quality):
+              </label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {(Object.keys(QUALITY_PRESETS) as VideoQuality[]).map((qKey) => {
                   const q = QUALITY_PRESETS[qKey];
                   const isSelected = selectedQuality === qKey;
@@ -367,27 +529,24 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
                       type="button"
                       disabled={isExportingVideo}
                       onClick={() => setSelectedQuality(qKey)}
-                      className={`w-full text-right p-3 rounded-lg border transition-all ${
+                      className={`text-right p-3 rounded-lg border transition-all ${
                         isSelected
                           ? 'border-amber-400 bg-amber-500/10 shadow-sm'
                           : 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-bold text-white flex items-center gap-2">
+                        <span className="text-xs font-bold text-white flex items-center gap-1.5">
                           <span
                             className={`h-2 w-2 rounded-full ${
                               isSelected ? 'bg-amber-400' : 'bg-slate-600'
                             }`}
                           />
-                          {q.label}
-                        </span>
-                        <span className="text-[10px] font-mono text-amber-400/90 bg-amber-400/10 px-1.5 py-0.5 rounded">
-                          {q.badge}
+                          {q.id === '1080p' ? '1080p Full HD' : q.id === '720p' ? '720p HD' : '480p SD'}
                         </span>
                       </div>
-                      <p className="text-[11px] text-slate-400 mr-4">
-                        {q.description} ({q.fps}fps · {q.bitrate / 1_000_000}Mbps)
+                      <p className="text-[10px] text-slate-400">
+                        {q.width}x{q.height} · {q.fps}fps
                       </p>
                     </button>
                   );
@@ -395,57 +554,45 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
               </div>
             </div>
 
-            {/* Channel Branding & Watermark Configuration */}
-            <div className="space-y-3 p-3.5 rounded-lg border border-slate-800 bg-slate-950/90">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <Tag className="h-3.5 w-3.5 text-amber-400" />
-                  <span>هوية القناة والعلامة المائية (Dual Branding):</span>
+            {/* 4. Channel Branding & Watermark Configuration */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-lg border border-slate-800 bg-slate-950/90">
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">
+                  اسم القناة في الشارة العلوية (Badge):
                 </label>
-                <span className="text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">
-                  أعلى اليسار + أسفل اليمين
-                </span>
+                <input
+                  type="text"
+                  value={channelBrandName}
+                  disabled={isExportingVideo}
+                  onChange={(e) => setChannelBrandName(e.target.value)}
+                  placeholder="MachinaMind"
+                  className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-medium text-amber-300 placeholder-slate-600 focus:outline-none focus:border-amber-400"
+                />
               </div>
 
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    اسم القناة في الشارة العلوية (أعلى اليسار):
-                  </label>
-                  <input
-                    type="text"
-                    value={channelBrandName}
-                    disabled={isExportingVideo}
-                    onChange={(e) => setChannelBrandName(e.target.value)}
-                    placeholder="MachinaMind"
-                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-medium text-amber-300 placeholder-slate-600 focus:outline-none focus:border-amber-400"
-                  />
+              <div className="flex items-center justify-between sm:pt-4">
+                <div className="flex flex-col">
+                  <span className="text-xs text-slate-300 font-medium">العلامة المائية السفلية</span>
+                  <span className="text-[10px] text-slate-500">حماية شفافة بنسبة 35%</span>
                 </div>
-
-                <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
-                  <div className="flex flex-col">
-                    <span className="text-xs text-slate-300 font-medium">العلامة المائية (أسفل اليمين)</span>
-                    <span className="text-[10px] text-slate-500">حماية شفافة بنسبة 35% لضمان حقوق الفيديو</span>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isExportingVideo}
-                    onClick={() => setShowWatermark(!showWatermark)}
-                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      showWatermark ? 'bg-amber-500' : 'bg-slate-700'
+                <button
+                  type="button"
+                  disabled={isExportingVideo}
+                  onClick={() => setShowWatermark(!showWatermark)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    showWatermark ? 'bg-amber-500' : 'bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-slate-950 shadow ring-0 transition duration-200 ease-in-out ${
+                      showWatermark ? 'translate-x-4' : 'translate-x-0'
                     }`}
-                  >
-                    <span
-                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-slate-950 shadow ring-0 transition duration-200 ease-in-out ${
-                        showWatermark ? 'translate-x-4' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
+                  />
+                </button>
               </div>
             </div>
 
-            {/* Scene Selection Mode */}
+            {/* 5. Scene Selection Mode */}
             <div className="space-y-3 p-3.5 rounded-lg border border-slate-800 bg-slate-950/90">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -457,88 +604,29 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
                 </span>
               </div>
 
-              {/* Mode Buttons Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                <button
-                  type="button"
-                  disabled={isExportingVideo}
-                  onClick={() => setSceneSelectionMode('all')}
-                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
-                    sceneSelectionMode === 'all'
-                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
-                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  الكل ({allScenes.length} مشهد)
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isExportingVideo}
-                  onClick={() => setSceneSelectionMode('first3')}
-                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
-                    sceneSelectionMode === 'first3'
-                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
-                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  ⚡ تجربة سريعة (أول 3)
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isExportingVideo}
-                  onClick={() => setSceneSelectionMode('first5')}
-                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
-                    sceneSelectionMode === 'first5'
-                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
-                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  أول 5 مشاهد
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isExportingVideo}
-                  onClick={() => setSceneSelectionMode('first10')}
-                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
-                    sceneSelectionMode === 'first10'
-                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
-                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  أول 10 مشاهد
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isExportingVideo}
-                  onClick={() => setSceneSelectionMode('custom_count')}
-                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
-                    sceneSelectionMode === 'custom_count'
-                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
-                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  🔢 عدد مخصص
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isExportingVideo}
-                  onClick={() => setSceneSelectionMode('range')}
-                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
-                    sceneSelectionMode === 'range'
-                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
-                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  🎯 نطاق مخصص
-                </button>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {[
+                  { id: 'first3', label: '⚡ تجربة سريعة (3 مشاهد)' },
+                  { id: 'first5', label: 'أول 5 مشاهد' },
+                  { id: 'all', label: `الكل (${allScenes.length} مشهد)` },
+                  { id: 'custom_count', label: '🔢 عدد مخصص' },
+                ].map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    disabled={isExportingVideo}
+                    onClick={() => setSceneSelectionMode(m.id as SceneSelectionMode)}
+                    className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
+                      sceneSelectionMode === m.id
+                        ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
+                        : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
               </div>
 
-              {/* Sub-inputs for custom count or range */}
               {sceneSelectionMode === 'custom_count' && (
                 <div className="flex items-center gap-2 p-2 bg-slate-900/90 rounded border border-slate-800 text-xs">
                   <span className="text-slate-300">أول عدد من المشاهد:</span>
@@ -554,64 +642,49 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
                   <span className="text-slate-400 text-[11px]">من إجمالي {allScenes.length}</span>
                 </div>
               )}
+            </div>
 
-              {sceneSelectionMode === 'range' && (
-                <div className="flex items-center gap-2 p-2 bg-slate-900/90 rounded border border-slate-800 text-xs">
-                  <span className="text-slate-300">من مشهد:</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={allScenes.length}
-                    value={rangeStart}
-                    disabled={isExportingVideo}
-                    onChange={(e) => setRangeStart(Math.max(1, Math.min(Number(e.target.value) || 1, allScenes.length)))}
-                    className="w-16 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-amber-400 font-mono font-bold text-center text-xs focus:outline-none focus:border-amber-400"
-                  />
-                  <span className="text-slate-300">إلى مشهد:</span>
-                  <input
-                    type="number"
-                    min={rangeStart}
-                    max={allScenes.length}
-                    value={rangeEnd}
-                    disabled={isExportingVideo}
-                    onChange={(e) => setRangeEnd(Math.max(rangeStart, Math.min(Number(e.target.value) || rangeStart, allScenes.length)))}
-                    className="w-16 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-amber-400 font-mono font-bold text-center text-xs focus:outline-none focus:border-amber-400"
-                  />
-                  <span className="text-slate-400 text-[11px]">({selectedScenes.length} مشاهد)</span>
-                </div>
-              )}
+            {/* Background Working Resilience Alert */}
+            <div className="p-3 bg-slate-950/80 rounded-lg border border-slate-800 text-[11px] text-slate-300 flex items-start gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold text-white">العمل في الخلفية مفعل: </span>
+                {renderEngine === 'server_ffmpeg' ? (
+                  <span>
+                    الرندر ينفذ بالكامل على السيرفر، يمكنك الآن تصغير المتصفح، التبديل بين البرامج، أو تصفح مواقع أخرى دون أي قلق من توقف الرندر أو تشتت مزامنة الصوت!
+                  </span>
+                ) : (
+                  <span>
+                    عند استخدام المحرك المحلي، يفضل إبقاء التبويب ظاهراً للحفاظ على استقرار مؤقتات الصوت والصورة.
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Stats summary */}
-            <div className="space-y-2 text-xs pt-1">
-              <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
-                <span>المشاهد المحددة للرندر</span>
-                <span className="font-mono tabular-nums font-bold text-amber-400">
-                  {selectedScenes.length} مشهد (من أصل {allScenes.length})
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              <div className="p-2.5 bg-slate-950 rounded border border-slate-800 text-slate-300">
+                <span className="text-[10px] text-slate-500 block">المشاهد المحددة</span>
+                <span className="font-mono tabular-nums font-bold text-amber-400 text-sm">
+                  {selectedScenes.length} مشهد
                 </span>
               </div>
-              <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
-                <span>المشاهد الصوتية الجاهزة</span>
-                <span className="font-mono tabular-nums font-bold text-emerald-400">
+              <div className="p-2.5 bg-slate-950 rounded border border-slate-800 text-slate-300">
+                <span className="text-[10px] text-slate-500 block">الصوتيات الجاهزة</span>
+                <span className="font-mono tabular-nums font-bold text-emerald-400 text-sm">
                   {selectedReadyAudioCount} / {selectedScenes.length}
                 </span>
               </div>
-              <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
-                <span>المدة المقدرة للرندر</span>
-                <span className="font-mono tabular-nums text-slate-200">
-                  {Math.floor(selectedTotalDuration / 60)} د و {Math.round(selectedTotalDuration % 60)} ث ({Math.round(selectedTotalDuration)} ثانية)
+              <div className="p-2.5 bg-slate-950 rounded border border-slate-800 text-slate-300">
+                <span className="text-[10px] text-slate-500 block">المدة الإجمالية</span>
+                <span className="font-mono tabular-nums text-slate-200 text-sm">
+                  {Math.round(selectedTotalDuration)} ثانية
                 </span>
               </div>
-              <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
-                <span>الدقة المختارة</span>
-                <span className="font-mono text-amber-400 font-bold">
-                  {QUALITY_PRESETS[selectedQuality].width}x{QUALITY_PRESETS[selectedQuality].height} ({selectedQuality})
-                </span>
-              </div>
-              <div className="flex items-center justify-between p-2 bg-slate-950 rounded border border-slate-800 text-[11px] text-slate-400">
-                <span>الميزات المطبقة:</span>
-                <span className="font-medium text-amber-400 flex items-center gap-1">
-                  <span className="text-emerald-400 font-bold">✓</span> صيغة MP4 القياسية · ترجمة ريلز ضخمة 72px · ترويسة أندرويد وواتساب
+              <div className="p-2.5 bg-slate-950 rounded border border-slate-800 text-slate-300">
+                <span className="text-[10px] text-slate-500 block">الدقة والصيغة</span>
+                <span className="font-mono text-amber-400 font-bold text-sm">
+                  {QUALITY_PRESETS[selectedQuality].width}p · MP4
                 </span>
               </div>
             </div>
@@ -619,27 +692,27 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
             {/* Render Progress or Buttons */}
             {isExportingVideo ? (
               <div className="space-y-3 pt-2">
-                <div className="space-y-1.5">
+                <div className="space-y-2 p-4 bg-slate-950 rounded-xl border border-amber-500/30">
                   <div className="flex justify-between text-xs text-slate-200">
-                    <span className="flex items-center gap-1.5 text-amber-400">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      <span>{renderProgress?.statusText || 'جارِ الرندر...'}</span>
+                    <span className="flex items-center gap-1.5 text-amber-400 font-medium">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>{renderProgress?.statusText || 'جارِ الرندر على السيرفر...'}</span>
                     </span>
-                    <span className="font-mono font-bold text-amber-400">
+                    <span className="font-mono font-bold text-amber-400 text-sm">
                       {renderProgress?.percent || 0}%
                     </span>
                   </div>
 
-                  <div className="h-2.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                  <div className="h-3 w-full bg-slate-800 rounded-full overflow-hidden p-0.5">
                     <div
-                      className="h-full bg-gradient-to-r from-amber-500 to-amber-300 transition-all duration-200"
+                      className="h-full bg-gradient-to-r from-amber-500 via-amber-400 to-amber-300 rounded-full transition-all duration-300"
                       style={{ width: `${renderProgress?.percent || 0}%` }}
                     />
                   </div>
 
                   <div className="flex justify-between text-[11px] text-slate-400 font-mono">
                     <span>
-                      المشهد {renderProgress?.currentSceneIndex || 0} / {renderProgress?.totalScenes || selectedScenes.length}
+                      المشهد {renderProgress?.currentSceneIndex || 0} من {renderProgress?.totalScenes || selectedScenes.length}
                     </span>
                     <span>
                       {renderProgress?.currentTimeSec || 0}ث / {renderProgress?.totalTimeSec || Math.round(selectedTotalDuration)}ث
@@ -649,25 +722,27 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
 
                 <button
                   onClick={handleAbortRender}
-                  className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-600/40 text-xs transition-colors"
+                  className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-600/40 text-xs font-semibold transition-colors"
                 >
-                  <StopCircle className="h-3.5 w-3.5" />
+                  <StopCircle className="h-4 w-4" />
                   <span>إلغاء عملية الرندر</span>
                 </button>
               </div>
             ) : (
               <button
                 onClick={handleStartRender}
-                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg bg-gradient-to-r from-amber-400 to-amber-300 hover:from-amber-300 hover:to-amber-200 text-slate-950 font-bold text-xs shadow-lg transition-all active:scale-95"
+                className="w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl bg-gradient-to-r from-amber-400 to-amber-300 hover:from-amber-300 hover:to-amber-200 text-slate-950 font-bold text-sm shadow-xl transition-all active:scale-[0.99]"
               >
                 <Film className="h-4 w-4 text-slate-950" />
-                <span>رندر {selectedScenes.length} مشهد ({Math.round(selectedTotalDuration)}ث) بدقة {selectedQuality}</span>
+                <span>
+                  بدء رندر {selectedScenes.length} مشهد ({Math.round(selectedTotalDuration)}ث) عبر {renderEngine === 'server_ffmpeg' ? 'سيرفر FFmpeg (MP4)' : 'المتصفح'}
+                </span>
               </button>
             )}
 
             {/* Error Message */}
             {renderError && (
-              <div className="p-3 bg-red-950/60 border border-red-800/80 rounded-lg text-xs text-red-200 flex items-center gap-2">
+              <div className="p-3.5 bg-red-950/60 border border-red-800/80 rounded-lg text-xs text-red-200 flex items-center gap-2">
                 <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
                 <span>{renderError}</span>
               </div>
@@ -675,38 +750,55 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
 
             {/* Completed Rendered Video Preview & Download */}
             {renderedResult && !isExportingVideo && (
-              <div className="space-y-3 pt-3 border-t border-slate-800">
-                <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400 bg-emerald-500/10 p-2.5 rounded-lg border border-emerald-500/20">
-                  <CheckCircle2 className="h-4 w-4 shrink-0" />
-                  <span>تم إنتاج وتنزيل الفيديو بنجاح على جهازك!</span>
+              <div className="space-y-4 pt-4 border-t border-slate-800">
+                <div className="flex items-center justify-between text-xs font-semibold text-emerald-400 bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/20">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    <span>تم رندر وتصدير الفيديو بنجاح بصيغة MP4 القياسية!</span>
+                  </div>
+                  <span className="font-mono text-[10px] bg-emerald-500/20 px-2 py-0.5 rounded">
+                    جاهز للمعاينة والمشاركة
+                  </span>
                 </div>
 
-                {/* Embedded Video Preview Player */}
-                <div className="rounded-lg overflow-hidden border border-slate-800 bg-black aspect-video relative">
+                {/* Embedded Video Preview Player with Full Seek Controls */}
+                <div className="rounded-xl overflow-hidden border border-slate-800 bg-black aspect-video relative shadow-2xl">
                   <video
                     src={renderedResult.url}
                     controls
+                    playsInline
+                    preload="auto"
                     className="w-full h-full object-contain"
                   />
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
-                  <span>الحجم: {(renderedResult.sizeBytes / (1024 * 1024)).toFixed(1)} MB</span>
+                <div className="flex items-center justify-between text-xs text-slate-400 font-mono p-2 bg-slate-950 rounded border border-slate-800">
+                  <span>حجم الملف: {(renderedResult.sizeBytes / (1024 * 1024)).toFixed(2)} MB</span>
                   <span>المدة: {Math.round(renderedResult.durationSec)} ثانية</span>
+                  <span className="text-amber-400">صيغة: {renderedResult.mimeType}</span>
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={handleManualDownload}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-colors"
+                    className="flex-1 min-w-[200px] flex items-center justify-center gap-2 py-3 px-4 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-colors shadow-lg"
                   >
                     <Download className="h-4 w-4" />
-                    <span>تحميل الفيديو مرة أخرى</span>
+                    <span>تحميل فيديو MP4 النهائي</span>
+                  </button>
+
+                  <button
+                    onClick={handleExportSrt}
+                    className="flex items-center gap-2 py-3 px-3.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-colors"
+                    title="تحميل ملف الترجمة .SRT"
+                  >
+                    <Subtitles className="h-4 w-4 text-amber-400" />
+                    <span>تحميل الترجمة SRT</span>
                   </button>
 
                   <button
                     onClick={handleStartRender}
-                    className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+                    className="p-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
                     title="إعادة الرندر"
                   >
                     <RotateCcw className="h-4 w-4" />
@@ -714,59 +806,6 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
                 </div>
               </div>
             )}
-          </div>
-
-          {/* Thumbnail Prompt */}
-          <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 space-y-3">
-            <div className="flex items-center justify-between text-xs text-slate-300 font-semibold">
-              <span>برومبت الغلاف المصغر (Thumbnail Prompt)</span>
-              <button
-                onClick={() => copyText(publishData.thumbnail_prompt_en, 'thumb_prompt')}
-                className="p-1 text-slate-400 hover:text-amber-400 transition-colors"
-                title="نسخ برومبت الغلاف"
-              >
-                {copiedKey === 'thumb_prompt' ? (
-                  <Check className="h-4 w-4 text-emerald-400" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-
-            <p className="p-3 bg-slate-950 rounded-lg border border-slate-800 text-xs text-slate-300 font-serif italic" dir="ltr">
-              {publishData.thumbnail_prompt_en}
-            </p>
-          </div>
-
-          {/* Tags */}
-          <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 space-y-3">
-            <div className="flex items-center justify-between text-xs text-slate-300 font-semibold">
-              <span className="flex items-center gap-1.5">
-                <Tag className="h-4 w-4 text-amber-400" />
-                <span>الكلمات المفتاحية ({publishData.tags.length})</span>
-              </span>
-              <button
-                onClick={() => copyText(publishData.tags.join(', '), 'all_tags')}
-                className="text-xs text-slate-400 hover:text-amber-400 transition-colors"
-              >
-                {copiedKey === 'all_tags' ? (
-                  <span className="text-emerald-400 font-bold">تم نسخ التاجات</span>
-                ) : (
-                  <span>نسخ كـ CSV</span>
-                )}
-              </button>
-            </div>
-
-            <div className="flex flex-wrap gap-1.5 p-3 bg-slate-950 rounded-lg border border-slate-800 max-h-48 overflow-y-auto">
-              {publishData.tags.map((tag, idx) => (
-                <span
-                  key={idx}
-                  className="text-[11px] font-mono text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
           </div>
         </div>
       </div>

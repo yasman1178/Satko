@@ -1,5 +1,12 @@
-import type {Metadata} from 'next';
-import './globals.css'; // Global styles
+import type { Metadata } from 'next';
+import './globals.css';
+import { Cairo } from 'next/font/google';
+
+const cairo = Cairo({
+  subsets: ['arabic', 'latin'],
+  weight: ['400', '600', '700', '800', '900'],
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'Mindplicit Studio - استوديو الفيديوهات السيكولوجية',
@@ -16,10 +23,13 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({children}: {children: React.ReactNode}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ar" dir="rtl" className="dark">
-      <body suppressHydrationWarning className="bg-slate-950 text-slate-100 antialiased selection:bg-amber-500/30 selection:text-amber-200">
+      <body
+        suppressHydrationWarning
+        className={`${cairo.className} bg-slate-950 text-slate-100 antialiased selection:bg-amber-500/30 selection:text-amber-200`}
+      >
         {children}
       </body>
     </html>

@@ -4,6 +4,7 @@ import { Scene, MotionType } from '@/types/project';
 import { patchVideoDuration } from '@/lib/video-duration-patcher';
 
 export type VideoQuality = '1080p' | '720p' | '480p';
+export type RenderEngine = 'server_ffmpeg' | 'browser_canvas';
 
 export interface QualityConfig {
   id: VideoQuality;
@@ -49,25 +50,20 @@ export const QUALITY_PRESETS: Record<VideoQuality, QualityConfig> = {
   },
 };
 
-export interface TimedWord {
-  text: string;
-  startSec: number;
-  endSec: number;
-}
+import {
+  calculateWeightedWordTiming,
+  type TimedWord,
+  type TimedWordChunk,
+} from '@/lib/word-timing';
 
-export interface TimedWordChunk {
-  text: string;
-  startSec: number;
-  endSec: number;
-  startProgress: number; // 0 to 1
-  endProgress: number;   // 0 to 1
-  wordCount: number;
-  words: TimedWord[];
-}
+export { calculateWeightedWordTiming, type TimedWord, type TimedWordChunk };
 
 export interface RenderOptions {
   channelName?: string;
   showWatermark?: boolean;
+  engine?: RenderEngine;
+  timingOffset?: number; // In seconds, e.g. +0.25s delay so subtitles don't rush ahead of audio
+  wordsPerChunk?: number;
 }
 
 export interface RenderProgress {
@@ -86,119 +82,184 @@ export interface RenderResult {
   durationSec: number;
   sizeBytes: number;
   mimeType: string;
+  engine: RenderEngine;
+}
+
+export function splitTextIntoWordChunks(text: string, durationSec: number = 4.0): TimedWordChunk[] {
+  return calculateWeightedWordTiming(text, durationSec, 0.25);
 }
 
 /**
- * Calculates weighted word timing proportional to syllable/character counts and punctuation pauses,
- * delivering exact 1:1 real-time synchronization with TTS speech audio.
+ * Generates standard SRT subtitle text for the entire project
+ * so creators can import it into CapCut, Premiere Pro, or DaVinci Resolve.
  */
-export function calculateWeightedWordTiming(text: string, durationSec: number): TimedWordChunk[] {
-  if (!text || !text.trim()) return [];
+export function exportSrtSubtitles(scenes: Scene[], timingOffsetSec: number = 0.25): string {
+  let srt = '';
+  let counter = 1;
+  let globalElapsed = 0;
 
-  const rawWords = text.trim().split(/\s+/).filter(Boolean);
-  if (rawWords.length === 0) return [];
+  const formatSrtTime = (seconds: number) => {
+    const safe = Math.max(0, seconds);
+    const h = Math.floor(safe / 3600);
+    const m = Math.floor((safe % 3600) / 60);
+    const s = Math.floor(safe % 60);
+    const ms = Math.floor((safe % 1) * 1000);
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+  };
 
-  // Group into punchy 3-5 word chunks based on natural conversational pauses
-  const chunkedWordGroups: string[][] = [];
-  let currentGroup: string[] = [];
+  for (const scene of scenes) {
+    const duration = scene.duration_seconds || 3.8;
+    const chunks = calculateWeightedWordTiming(scene.narration_text || '', duration, timingOffsetSec);
 
-  for (let i = 0; i < rawWords.length; i++) {
-    const word = rawWords[i];
-    currentGroup.push(word);
+    for (const chunk of chunks) {
+      const start = formatSrtTime(globalElapsed + chunk.startSec);
+      const end = formatSrtTime(globalElapsed + chunk.endSec);
 
-    const hasPause = /[,;:.!?،؛؟—\-]$/.test(word);
-    const count = currentGroup.length;
-    const remaining = rawWords.length - 1 - i;
-
-    const shouldBreak =
-      (count >= 3 && hasPause && remaining >= 2) ||
-      (count >= 4 && remaining >= 3) ||
-      count >= 5 ||
-      i === rawWords.length - 1;
-
-    if (shouldBreak) {
-      if (remaining === 1 && count < 5) {
-        continue;
-      }
-      chunkedWordGroups.push(currentGroup);
-      currentGroup = [];
+      srt += `${counter}\n`;
+      srt += `${start} --> ${end}\n`;
+      srt += `${chunk.text}\n\n`;
+      counter++;
     }
+
+    globalElapsed += duration;
   }
 
-  if (currentGroup.length > 0) {
-    if (chunkedWordGroups.length > 0 && currentGroup.length < 3) {
-      chunkedWordGroups[chunkedWordGroups.length - 1].push(...currentGroup);
-    } else {
-      chunkedWordGroups.push(currentGroup);
-    }
+  return srt;
+}
+
+/**
+ * High-Speed Server FFmpeg Video Render Pipeline
+ * Immune to browser tab throttling / minimizing.
+ * Produces genuine MP4 with crystal clear H.264 / AAC encoding.
+ */
+export async function renderServerVideo(
+  scenes: Scene[],
+  quality: VideoQuality = '1080p',
+  onProgress: (p: RenderProgress) => void,
+  options?: RenderOptions,
+  abortSignal?: AbortSignal
+): Promise<RenderResult> {
+  if (!scenes || scenes.length === 0) {
+    throw new Error('لا توجد مشاهد صالحة للرندر');
   }
 
-  // Calculate syllable / character weight for every word
-  const speechStartSec = 0.08; // natural audio onset buffer
-  const effectiveSpeechDuration = Math.max(1.0, (durationSec - 0.2) * 0.95);
+  const totalEstimatedDuration = scenes.reduce(
+    (sum, s) => sum + (s.duration_seconds || 3.8),
+    0
+  );
 
-  const wordWeights: number[] = [];
-  rawWords.forEach((w) => {
-    const cleanLen = Math.max(1, w.replace(/[^a-zA-Z\u0600-\u06FF0-9]/g, '').length);
-    const hasPause = /[,;:.!?،؛؟—\-]$/.test(w);
-    const weight = cleanLen + (hasPause ? 3 : 0);
-    wordWeights.push(weight);
+  onProgress({
+    currentSceneIndex: 0,
+    totalScenes: scenes.length,
+    percent: 2,
+    currentTimeSec: 0,
+    totalTimeSec: Math.round(totalEstimatedDuration),
+    statusText: 'إرسال مشروع الفيديو إلى محرك السيرفر السحابي (FFmpeg)...',
   });
 
-  const totalWeight = wordWeights.reduce((a, b) => a + b, 0) || 1;
+  // 1. Send render request to server API
+  const response = await fetch('/api/render/server', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scenes: scenes.map((s, idx) => ({
+        scene_id: s.scene_id || `sc_${idx + 1}`,
+        narration_text: s.narration_text || '',
+        duration_seconds: s.duration_seconds || 3.8,
+        audio_url: s.audio_url || '',
+        image_url: s.image_url || '',
+        motion: s.motion || 'zoom_in',
+      })),
+      quality: quality === '480p' ? '720p' : quality, // FFmpeg handles 720p and 1080p fast
+      channelName: options?.channelName || 'MachinaMind',
+      showWatermark: options?.showWatermark !== false,
+      timingOffset: options?.timingOffset ?? 0.25,
+      wordsPerChunk: options?.wordsPerChunk || 4,
+    }),
+    signal: abortSignal,
+  });
 
-  let elapsedSec = speechStartSec;
-  let wordGlobalIdx = 0;
-
-  const resultChunks: TimedWordChunk[] = [];
-
-  for (let cIdx = 0; cIdx < chunkedWordGroups.length; cIdx++) {
-    const group = chunkedWordGroups[cIdx];
-    const chunkWords: TimedWord[] = [];
-    const chunkStartSec = elapsedSec;
-
-    for (let wIdx = 0; wIdx < group.length; wIdx++) {
-      const wordText = group[wIdx];
-      const weight = wordWeights[wordGlobalIdx] || 2;
-      wordGlobalIdx++;
-
-      const wordDuration = (weight / totalWeight) * effectiveSpeechDuration;
-      const wStart = elapsedSec;
-      const wEnd = elapsedSec + wordDuration;
-      elapsedSec = wEnd;
-
-      chunkWords.push({
-        text: wordText,
-        startSec: wStart,
-        endSec: wEnd,
-      });
-    }
-
-    const isLast = cIdx === chunkedWordGroups.length - 1;
-    const chunkEndSec = isLast
-      ? Math.max(elapsedSec, durationSec - 0.05)
-      : elapsedSec;
-
-    resultChunks.push({
-      text: group.join(' '),
-      startSec: chunkStartSec,
-      endSec: chunkEndSec,
-      startProgress: Math.min(1.0, chunkStartSec / durationSec),
-      endProgress: Math.min(1.0, chunkEndSec / durationSec),
-      wordCount: group.length,
-      words: chunkWords,
-    });
+  if (!response.ok) {
+    const errorJson = await response.json().catch(() => ({}));
+    throw new Error(errorJson.error || `فشل الاتصال بسيرفر الرندر (${response.status})`);
   }
 
-  return resultChunks;
+  const { renderId } = await response.json();
+  if (!renderId) {
+    throw new Error('لم يتم استلام معرّف الرندر من السيرفر');
+  }
+
+  // 2. Poll server status until completion
+  // This continues smoothly even if the user switches to other apps or tabs!
+  let isDone = false;
+  let finalStatusData: any = null;
+
+  while (!isDone) {
+    if (abortSignal?.aborted) {
+      throw new Error('تم إلغاء عملية الرندر من قبل المستخدم');
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 650));
+
+    try {
+      const statusRes = await fetch(`/api/render/status/${renderId}`, {
+        cache: 'no-store',
+      });
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        finalStatusData = data;
+
+        onProgress({
+          currentSceneIndex: data.currentScene || 0,
+          totalScenes: data.totalScenes || scenes.length,
+          percent: Math.min(99, Math.max(5, data.percent || 10)),
+          currentTimeSec: Math.round(((data.percent || 5) / 100) * totalEstimatedDuration),
+          totalTimeSec: Math.round(totalEstimatedDuration),
+          statusText: data.statusText || 'جارِ المعالجة بواسطة FFmpeg...',
+        });
+
+        if (data.status === 'completed') {
+          isDone = true;
+          break;
+        } else if (data.status === 'error') {
+          throw new Error(data.error || 'حدث خطأ أثناء رندر الفيديو على السيرفر');
+        }
+      }
+    } catch (pollErr: any) {
+      if (pollErr.name === 'AbortError') throw pollErr;
+      console.warn('Status poll retry:', pollErr);
+    }
+  }
+
+  // 3. Fetch final video blob for direct in-browser playback & download
+  const downloadUrl = finalStatusData?.downloadUrl || `/api/render/download/${renderId}`;
+  
+  onProgress({
+    currentSceneIndex: scenes.length,
+    totalScenes: scenes.length,
+    percent: 100,
+    currentTimeSec: Math.round(totalEstimatedDuration),
+    totalTimeSec: Math.round(totalEstimatedDuration),
+    statusText: 'اكتمل الرندر! جارِ تجهيز ملف MP4 للمعاينة والتحميل...',
+  });
+
+  const blobRes = await fetch(downloadUrl);
+  const blob = blobRes.ok ? await blobRes.blob() : new Blob([], { type: 'video/mp4' });
+
+  return {
+    blob,
+    url: downloadUrl,
+    filename: finalStatusData?.filename || `Mindplicit_${Date.now()}.mp4`,
+    durationSec: finalStatusData?.durationSec || Math.round(totalEstimatedDuration),
+    sizeBytes: finalStatusData?.sizeBytes || blob.size,
+    mimeType: 'video/mp4',
+    engine: 'server_ffmpeg',
+  };
 }
 
-/**
- * Backward compatibility wrapper for splitTextIntoWordChunks
- */
-export function splitTextIntoWordChunks(text: string, durationSec: number = 4.0): TimedWordChunk[] {
-  return calculateWeightedWordTiming(text, durationSec);
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT-SIDE ENGINE (Used as instant preview or optional offline fallback)
+// ─────────────────────────────────────────────────────────────────────────────
 
 function drawRoundRect(
   ctx: CanvasRenderingContext2D,
@@ -226,9 +287,6 @@ function drawRoundRect(
   }
 }
 
-/**
- * Draws top-left channel brand badge and bottom-right subtle watermark
- */
 export function drawBrandOverlays(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -239,12 +297,12 @@ export function drawBrandOverlays(
 ) {
   ctx.save();
 
-  // 1. TOP-LEFT Channel Badge
+  // Top-Left Channel Badge
   const badgeX = Math.round(40 * scaleRatio);
   const badgeY = Math.round(36 * scaleRatio);
   const badgeH = Math.round(48 * scaleRatio);
 
-  ctx.font = `bold ${Math.round(18 * scaleRatio)}px "Plus Jakarta Sans", system-ui, sans-serif`;
+  ctx.font = `bold ${Math.round(18 * scaleRatio)}px "Cairo", system-ui, sans-serif`;
   const nameWidth = ctx.measureText(channelName).width;
   const badgeW = Math.max(Math.round(190 * scaleRatio), Math.round(nameWidth + 64 * scaleRatio));
 
@@ -255,7 +313,7 @@ export function drawBrandOverlays(
   ctx.fill();
   ctx.stroke();
 
-  // Golden Diamond Icon
+  // Diamond Icon
   ctx.fillStyle = '#F59E0B';
   const iconSize = Math.round(16 * scaleRatio);
   const iconCenterX = badgeX + Math.round(22 * scaleRatio);
@@ -268,20 +326,18 @@ export function drawBrandOverlays(
   ctx.closePath();
   ctx.fill();
 
-  // Channel Name Text
   ctx.fillStyle = '#FFFFFF';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText(channelName, iconCenterX + Math.round(14 * scaleRatio), iconCenterY);
 
-  // 2. BOTTOM-RIGHT Subtle Watermark (Semi-transparent, non-intrusive)
+  // Bottom-Right Watermark
   if (showWatermark) {
     const wmPaddingX = Math.round(36 * scaleRatio);
     const wmPaddingY = Math.round(32 * scaleRatio);
     ctx.textAlign = 'right';
     ctx.textBaseline = 'bottom';
-    ctx.font = `600 ${Math.round(16 * scaleRatio)}px "Plus Jakarta Sans", system-ui, sans-serif`;
-
+    ctx.font = `600 ${Math.round(16 * scaleRatio)}px "Cairo", system-ui, sans-serif`;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
     ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
     ctx.shadowBlur = Math.round(6 * scaleRatio);
@@ -291,10 +347,6 @@ export function drawBrandOverlays(
   ctx.restore();
 }
 
-/**
- * Draws modern cinematic floating subtitles with smooth word-by-word golden highlight,
- * atmospheric scrim gradient, and 100% legibility on any background image.
- */
 export function drawCinematicSubtitles(
   ctx: CanvasRenderingContext2D,
   chunk: TimedWordChunk,
@@ -307,7 +359,7 @@ export function drawCinematicSubtitles(
 
   ctx.save();
 
-  // 1. Bottom Atmospheric Gradient Scrim (No rigid boxed pill, silky cinematic darkening)
+  // Atmospheric scrim
   const scrimH = Math.round(340 * scaleRatio);
   const textScrim = ctx.createLinearGradient(0, height - scrimH, 0, height);
   textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
@@ -317,19 +369,11 @@ export function drawCinematicSubtitles(
   ctx.fillStyle = textScrim;
   ctx.fillRect(0, height - scrimH, width, scrimH);
 
-  // 2. Typography Setup
-  const fontSize = Math.round(58 * scaleRatio);
-  ctx.font = `900 ${fontSize}px "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+  const fontSize = Math.round(56 * scaleRatio);
+  ctx.font = `bold ${fontSize}px "Cairo", system-ui, sans-serif`;
   ctx.textBaseline = 'middle';
 
-  const words = chunk.words && chunk.words.length > 0
-    ? chunk.words
-    : chunk.text.trim().split(/\s+/).map((w, i, arr) => ({
-        text: w,
-        startSec: chunk.startSec + (i / arr.length) * (chunk.endSec - chunk.startSec),
-        endSec: chunk.startSec + ((i + 1) / arr.length) * (chunk.endSec - chunk.startSec),
-      }));
-
+  const words = chunk.words && chunk.words.length > 0 ? chunk.words : [];
   const textY = height - Math.round(130 * scaleRatio);
   const spaceWidth = ctx.measureText(' ').width;
 
@@ -340,116 +384,84 @@ export function drawCinematicSubtitles(
     endSec: w.endSec,
   }));
 
-  const totalPhraseWidth = wordMeasurements.reduce((acc, m) => acc + m.width, 0) + (wordMeasurements.length - 1) * spaceWidth;
-  
-  // Scale down gracefully if phrase exceeds 86% of viewport width
+  const totalPhraseWidth =
+    wordMeasurements.reduce((acc, m) => acc + m.width, 0) +
+    Math.max(0, wordMeasurements.length - 1) * spaceWidth;
+
   let phraseScale = 1.0;
   const maxAllowedWidth = width * 0.86;
   if (totalPhraseWidth > maxAllowedWidth) {
     phraseScale = maxAllowedWidth / totalPhraseWidth;
   }
 
-  ctx.save();
   ctx.translate(width / 2, textY);
-  ctx.scale(phraseScale, phraseScale);
-  ctx.translate(-width / 2, -textY);
-
-  const isArabic = /[\u0600-\u06FF]/.test(chunk.text);
-
-  if (isArabic) {
-    // In Arabic (RTL): first word spoken appears on the RIGHT, flowing leftwards
-    let curX = (width + totalPhraseWidth) / 2;
-
-    for (let i = 0; i < wordMeasurements.length; i++) {
-      const wm = wordMeasurements[i];
-      curX -= wm.width;
-
-      const isActive = sceneElapsedSec >= wm.startSec && sceneElapsedSec < wm.endSec;
-      const isPast = sceneElapsedSec >= wm.endSec;
-      const isHeld = sceneElapsedSec >= wm.startSec;
-
-      ctx.save();
-      ctx.textAlign = 'left';
-
-      // Deep solid black outline for contrast
-      ctx.lineJoin = 'round';
-      ctx.miterLimit = 2;
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = Math.max(6, Math.round(10 * scaleRatio));
-      ctx.strokeText(wm.text, curX, textY);
-
-      if (isActive) {
-        // Glowing active word
-        ctx.fillStyle = '#F59E0B';
-        ctx.shadowColor = 'rgba(245, 158, 11, 0.95)';
-        ctx.shadowBlur = Math.round(18 * scaleRatio);
-        ctx.fillText(wm.text, curX, textY);
-      } else if (isPast || isHeld) {
-        // Spoken words in phrase
-        ctx.fillStyle = '#FFFFFF';
-        ctx.shadowColor = 'rgba(245, 158, 11, 0.3)';
-        ctx.shadowBlur = Math.round(8 * scaleRatio);
-        ctx.fillText(wm.text, curX, textY);
-      } else {
-        // Upcoming words in phrase
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-        ctx.shadowBlur = 0;
-        ctx.fillText(wm.text, curX, textY);
-      }
-
-      ctx.restore();
-      curX -= spaceWidth;
-    }
-  } else {
-    // Latin / English (LTR): first word on left, flowing rightwards
-    let curX = (width - totalPhraseWidth) / 2;
-
-    for (let i = 0; i < wordMeasurements.length; i++) {
-      const wm = wordMeasurements[i];
-
-      const isActive = sceneElapsedSec >= wm.startSec && sceneElapsedSec < wm.endSec;
-      const isPast = sceneElapsedSec >= wm.endSec;
-      const isHeld = sceneElapsedSec >= wm.startSec;
-
-      ctx.save();
-      ctx.textAlign = 'left';
-
-      ctx.lineJoin = 'round';
-      ctx.miterLimit = 2;
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = Math.max(6, Math.round(10 * scaleRatio));
-      ctx.strokeText(wm.text, curX, textY);
-
-      if (isActive) {
-        ctx.fillStyle = '#F59E0B';
-        ctx.shadowColor = 'rgba(245, 158, 11, 0.95)';
-        ctx.shadowBlur = Math.round(18 * scaleRatio);
-        ctx.fillText(wm.text, curX, textY);
-      } else if (isPast || isHeld) {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.shadowColor = 'rgba(245, 158, 11, 0.3)';
-        ctx.shadowBlur = Math.round(8 * scaleRatio);
-        ctx.fillText(wm.text, curX, textY);
-      } else {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-        ctx.shadowBlur = 0;
-        ctx.fillText(wm.text, curX, textY);
-      }
-
-      ctx.restore();
-      curX += wm.width + spaceWidth;
-    }
+  if (phraseScale < 1.0) {
+    ctx.scale(phraseScale, phraseScale);
   }
 
-  ctx.restore(); // restore scale
-  ctx.restore(); // restore scrim & state
+  let currentDrawX = -totalPhraseWidth / 2;
+
+  for (let i = 0; i < wordMeasurements.length; i++) {
+    const wm = wordMeasurements[i];
+    const isSpoken = sceneElapsedSec >= wm.startSec && sceneElapsedSec <= wm.endSec;
+    const isPast = sceneElapsedSec > wm.endSec;
+
+    ctx.save();
+    if (isSpoken) {
+      // Golden yellow highlight for currently spoken word
+      ctx.fillStyle = '#F59E0B';
+      ctx.shadowColor = 'rgba(245, 158, 11, 0.8)';
+      ctx.shadowBlur = Math.round(14 * scaleRatio);
+    } else if (isPast) {
+      // Solid white for already spoken words
+      ctx.fillStyle = '#FFFFFF';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+      ctx.shadowBlur = Math.round(8 * scaleRatio);
+    } else {
+      // Slightly muted white for upcoming words in the phrase
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+      ctx.shadowBlur = Math.round(6 * scaleRatio);
+    }
+
+    ctx.textAlign = 'left';
+    ctx.fillText(wm.text, currentDrawX, 0);
+    ctx.restore();
+
+    currentDrawX += wm.width + spaceWidth;
+  }
+
+  ctx.restore();
 }
 
 /**
- * Preloads an image safely with error fallback
+ * Loads an AudioBuffer from an audio URL or generates a silent buffer
  */
-async function preloadImage(url?: string): Promise<HTMLImageElement | null> {
-  if (!url) return null;
+async function loadAudioBuffer(
+  audioCtx: AudioContext,
+  url: string | undefined,
+  defaultDuration: number
+): Promise<AudioBuffer> {
+  if (url) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
+        const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+        return decoded;
+      }
+    } catch (err) {
+      console.warn('Audio fetch failed, generating silence buffer:', err);
+    }
+  }
+
+  const sampleRate = audioCtx.sampleRate || 44100;
+  const frameCount = Math.max(sampleRate, Math.round(sampleRate * (defaultDuration || 3.8)));
+  return audioCtx.createBuffer(1, frameCount, sampleRate);
+}
+
+function preloadImage(url: string | undefined): Promise<HTMLImageElement | null> {
+  if (!url) return Promise.resolve(null);
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -459,91 +471,69 @@ async function preloadImage(url?: string): Promise<HTMLImageElement | null> {
   });
 }
 
-/**
- * Loads and decodes an audio buffer from a URL or creates a silent buffer
- */
-async function loadAudioBuffer(
-  audioCtx: AudioContext,
-  url?: string,
-  fallbackDuration: number = 3.8
-): Promise<AudioBuffer> {
-  if (url) {
-    try {
-      const response = await fetch(url);
-      const arrayBuffer = await response.arrayBuffer();
-      return await audioCtx.decodeAudioData(arrayBuffer);
-    } catch (err) {
-      console.warn('Audio decoding fallback to silence:', err);
+function getBestSupportedMimeType(): { mimeType: string; extension: string } {
+  if (typeof MediaRecorder === 'undefined') {
+    return { mimeType: 'video/webm', extension: 'webm' };
+  }
+  const types = [
+    { mime: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
+    { mime: 'video/mp4', ext: 'mp4' },
+    { mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
+    { mime: 'video/webm;codecs=vp8,opus', ext: 'webm' },
+    { mime: 'video/webm', ext: 'webm' },
+  ];
+  for (const t of types) {
+    if (MediaRecorder.isTypeSupported(t.mime)) {
+      return { mimeType: t.mime, extension: t.ext };
     }
   }
-
-  // Fallback: create silent audio buffer
-  const sampleRate = audioCtx.sampleRate || 44100;
-  const frameCount = Math.max(1, Math.round(sampleRate * fallbackDuration));
-  return audioCtx.createBuffer(2, frameCount, sampleRate);
-}
-
-/**
- * Detects the best supported MediaRecorder MIME type.
- * Prioritizes standard MP4 (H.264/AAC or AVC1) as requested by the user,
- * with reliable WebM (VP9/VP8) fallback if the browser engine does not support native MP4 recorder.
- */
-function getBestSupportedMimeType(): { mimeType: string; extension: string } {
-  if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') {
-    return { mimeType: 'video/mp4', extension: 'mp4' };
-  }
-
-  // Prioritize standard MP4 first
-  const candidateTypes = [
-    { type: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
-    { type: 'video/mp4;codecs=avc1', ext: 'mp4' },
-    { type: 'video/mp4;codecs=h264,aac', ext: 'mp4' },
-    { type: 'video/mp4', ext: 'mp4' },
-    { type: 'video/webm;codecs=vp9,opus', ext: 'webm' },
-    { type: 'video/webm;codecs=vp8,opus', ext: 'webm' },
-    { type: 'video/webm', ext: 'webm' },
-  ];
-
-  for (const candidate of candidateTypes) {
-    try {
-      if (MediaRecorder.isTypeSupported(candidate.type)) {
-        return { mimeType: candidate.type, extension: candidate.ext };
-      }
-    } catch {}
-  }
-
   return { mimeType: 'video/webm', extension: 'webm' };
 }
 
 /**
- * Renders all project scenes sequentially onto a Canvas with synchronized audio tracks,
- * Ken Burns camera animation, MachinaMind channel badge, and huge Reels-style high-contrast subtitles.
+ * Universal video renderer: defaults to high-speed server FFmpeg engine,
+ * with graceful fallback to browser canvas if requested.
  */
 export async function renderProjectVideo(
   scenes: Scene[],
-  quality: VideoQuality,
-  onProgress: (progress: RenderProgress) => void,
-  abortSignal?: AbortSignal,
-  options?: RenderOptions
+  quality: VideoQuality = '1080p',
+  onProgress: (p: RenderProgress) => void,
+  options?: RenderOptions,
+  abortSignal?: AbortSignal
 ): Promise<RenderResult> {
-  if (!scenes || scenes.length === 0) {
-    throw new Error('لا توجد مشاهد متاحة للتصدير');
+  // Use Server FFmpeg engine by default as chosen by user!
+  if (!options?.engine || options.engine === 'server_ffmpeg') {
+    try {
+      return await renderServerVideo(scenes, quality, onProgress, options, abortSignal);
+    } catch (serverErr: any) {
+      console.warn('Server FFmpeg render encountered issue, trying browser fallback:', serverErr);
+      // If server render was aborted by user, rethrow
+      if (abortSignal?.aborted) throw serverErr;
+    }
   }
 
-  const config = QUALITY_PRESETS[quality];
+  // Fallback: Browser Canvas Renderer
+  return renderBrowserCanvasVideo(scenes, quality, onProgress, options, abortSignal);
+}
+
+/**
+ * Client-Side Browser Canvas Recorder (Fallback)
+ */
+async function renderBrowserCanvasVideo(
+  scenes: Scene[],
+  quality: VideoQuality = '1080p',
+  onProgress: (p: RenderProgress) => void,
+  options?: RenderOptions,
+  abortSignal?: AbortSignal
+): Promise<RenderResult> {
+  const config = QUALITY_PRESETS[quality] || QUALITY_PRESETS['1080p'];
   const { width, height, fps, bitrate } = config;
 
-  onProgress({
-    currentSceneIndex: 0,
-    totalScenes: scenes.length,
-    percent: 1,
-    currentTimeSec: 0,
-    totalTimeSec: 0,
-    statusText: 'تهيئة محرك الصوتيات والكانفاس...',
-  });
-
-  // 1. Initialize Audio Context & Stream Destination
   const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+  if (!AudioContextClass) {
+    throw new Error('متصفحك لا يدعم Web Audio API المطلوبة للرندر');
+  }
+
   const audioCtx = new AudioContextClass();
   if (audioCtx.state === 'suspended') {
     await audioCtx.resume();
@@ -551,14 +541,13 @@ export async function renderProjectVideo(
 
   const audioDest = audioCtx.createMediaStreamDestination();
 
-  // 2. Preload and decode all audio buffers and images ahead of time
   onProgress({
     currentSceneIndex: 0,
     totalScenes: scenes.length,
     percent: 5,
     currentTimeSec: 0,
     totalTimeSec: 0,
-    statusText: 'جارِ فك تشفير مسارات الصوت والصور في الذاكرة...',
+    statusText: 'فك تشفير الوسائط محلياً في الذاكرة...',
   });
 
   const sceneAssets: Array<{
@@ -588,7 +577,11 @@ export async function renderProjectVideo(
     const durationSec = Math.max(2.0, audioBuffer.duration || defaultDuration);
     totalDurationSec += durationSec;
 
-    const wordChunks = calculateWeightedWordTiming(scene.narration_text || '', durationSec);
+    const wordChunks = calculateWeightedWordTiming(
+      scene.narration_text || '',
+      durationSec,
+      options?.timingOffset ?? 0.25
+    );
 
     sceneAssets.push({
       scene,
@@ -597,24 +590,13 @@ export async function renderProjectVideo(
       durationSec,
       wordChunks,
     });
-
-    onProgress({
-      currentSceneIndex: i + 1,
-      totalScenes: scenes.length,
-      percent: Math.round(5 + ((i + 1) / scenes.length) * 15),
-      currentTimeSec: 0,
-      totalTimeSec: totalDurationSec,
-      statusText: `تم تجهيز وسائط المشهد ${i + 1} من ${scenes.length}`,
-    });
   }
 
-  // 3. Setup Render Canvas
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d', { alpha: false })!;
 
-  // 4. Capture Stream & Combine with Audio
   const canvasStream = canvas.captureStream(fps);
   const combinedStream = new MediaStream([
     ...canvasStream.getVideoTracks(),
@@ -636,32 +618,12 @@ export async function renderProjectVideo(
   };
 
   const recorderStoppedPromise = new Promise<Blob>((resolve) => {
-    recorder.onstop = () => {
-      try {
-        const finalBlob = new Blob(chunks, { type: mimeType });
-        resolve(finalBlob);
-      } catch (err) {
-        console.warn('onstop blob creation fallback:', err);
-        resolve(new Blob(chunks));
-      }
-    };
-    recorder.onerror = (err) => {
-      console.warn('MediaRecorder warning during capture, preserving collected chunks:', err);
-      try {
-        const fallbackBlob = new Blob(chunks, { type: mimeType });
-        resolve(fallbackBlob);
-      } catch {
-        resolve(new Blob(chunks));
-      }
-    };
+    recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType }));
+    recorder.onerror = () => resolve(new Blob(chunks, { type: mimeType }));
   });
 
-  recorder.start(250); // flush chunks every 250ms
-
-  // Scale ratio helper relative to 1920x1080 baseline
+  recorder.start(250);
   const scaleRatio = width / 1920;
-
-  // 5. Sequential Scene Rendering Loop
   let accumulatedTime = 0;
 
   for (let sceneIdx = 0; sceneIdx < sceneAssets.length; sceneIdx++) {
@@ -673,7 +635,6 @@ export async function renderProjectVideo(
 
     const { scene, audioBuffer, imageElement, durationSec, wordChunks } = sceneAssets[sceneIdx];
 
-    // Play scene audio into destination
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(audioDest);
@@ -696,7 +657,6 @@ export async function renderProjectVideo(
       const sceneElapsedSec = progress * durationSec;
       const currentGlobalSec = accumulatedTime + sceneElapsedSec;
 
-      // ─── Draw Background (Ken Burns motion) ───
       ctx.fillStyle = '#090D16';
       ctx.fillRect(0, 0, width, height);
 
@@ -737,40 +697,11 @@ export async function renderProjectVideo(
 
         const drawX = (width - drawW) / 2;
         const drawY = (height - drawH) / 2;
-
         ctx.drawImage(imageElement, drawX, drawY, drawW, drawH);
-      } else {
-        // Fallback procedural cinematic gradient
-        const bgGrad = ctx.createRadialGradient(
-          width / 2,
-          height / 2,
-          width * 0.1,
-          width / 2,
-          height / 2,
-          width * 0.7
-        );
-        bgGrad.addColorStop(0, '#1E293B');
-        bgGrad.addColorStop(1, '#0B0F17');
-        ctx.fillStyle = bgGrad;
-        ctx.fillRect(0, 0, width, height);
       }
       ctx.restore();
 
-      // Cinematic Vignette
-      const vignette = ctx.createRadialGradient(
-        width / 2,
-        height / 2,
-        width * 0.35,
-        width / 2,
-        height / 2,
-        width * 0.75
-      );
-      vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      vignette.addColorStop(1, 'rgba(0, 0, 0, 0.75)');
-      ctx.fillStyle = vignette;
-      ctx.fillRect(0, 0, width, height);
-
-      // ─── Dual Branding: Top-Left Badge & Bottom-Right Subtle Watermark ───
+      // Brand Overlays
       drawBrandOverlays(
         ctx,
         width,
@@ -780,7 +711,7 @@ export async function renderProjectVideo(
         options?.showWatermark !== false
       );
 
-      // ─── Active Reels-Style Cinematic Floating Subtitles (Exact 1:1 Audio Sync) ───
+      // Active Subtitles
       const activeChunk =
         wordChunks.find((c) => sceneElapsedSec >= c.startSec && sceneElapsedSec <= c.endSec) ||
         wordChunks.find((c) => sceneElapsedSec < c.endSec) ||
@@ -790,14 +721,12 @@ export async function renderProjectVideo(
         drawCinematicSubtitles(ctx, activeChunk, sceneElapsedSec, width, height, scaleRatio);
       }
 
-      // Sync with real-time video stream pacing
       const now = performance.now();
       const delayNeeded = frameTargetTime - now;
       if (delayNeeded > 1) {
         await new Promise((r) => setTimeout(r, delayNeeded));
       }
 
-      // Update progress every 5 frames
       if (frame % 5 === 0 || frame === totalFrames - 1) {
         const overallPercent = Math.min(
           99,
@@ -817,105 +746,34 @@ export async function renderProjectVideo(
     accumulatedTime += durationSec;
   }
 
-  // 6. Finalize Recording and Inject Accurate Duration Metadata
-  onProgress({
-    currentSceneIndex: scenes.length,
-    totalScenes: scenes.length,
-    percent: 99,
-    currentTimeSec: Math.round(totalDurationSec),
-    totalTimeSec: Math.round(totalDurationSec),
-    statusText: 'جارِ إتمام وتجميع ملف الفيديو وحقن بيانات التوقيت لهواتف أندرويد وواتساب...',
-  });
-
-  // Brief flush delay before stopping recorder and request data
-  await new Promise((r) => setTimeout(r, 300));
-  try {
-    if (recorder.state === 'recording') {
-      recorder.requestData();
-    }
-  } catch {}
-
+  await new Promise((r) => setTimeout(r, 200));
+  if (recorder.state === 'recording') {
+    recorder.requestData();
+  }
   await new Promise((r) => setTimeout(r, 100));
-
   if (recorder.state !== 'inactive') {
-    try {
-      recorder.stop();
-    } catch {}
+    recorder.stop();
   }
 
-  // Safety race timeout: wait up to 2500ms for recorderStoppedPromise, otherwise construct blob from collected chunks
-  const finalBlob = await Promise.race([
-    recorderStoppedPromise,
-    new Promise<Blob>((resolve) =>
-      setTimeout(() => {
-        resolve(new Blob(chunks, { type: mimeType }));
-      }, 2500)
-    ),
-  ]);
+  const rawBlob = await recorderStoppedPromise;
+  const patchedBlob = await patchVideoDuration(
+    rawBlob,
+    totalDurationSec,
+    extension === 'mp4' ? 'mp4' : 'webm'
+  );
 
-  // Stop all active tracks to free browser resources
-  try {
-    combinedStream.getTracks().forEach((track) => track.stop());
-  } catch {}
+  try { audioCtx.close(); } catch {}
 
-  // Patch Duration metadata with timeout protection (never hangs UI)
-  let patchedBlob = finalBlob;
-  try {
-    const formatType = (extension === 'mp4' || finalBlob.type.includes('mp4')) ? 'mp4' : 'webm';
-    const patchPromise = patchVideoDuration(finalBlob, totalDurationSec, formatType);
-    const patchTimeout = new Promise<Blob>((resolve) =>
-      setTimeout(() => {
-        console.warn('Duration patch timed out, using original blob');
-        resolve(finalBlob);
-      }, 3000)
-    );
-    patchedBlob = await Promise.race([patchPromise, patchTimeout]);
-  } catch (err) {
-    console.warn('Error patching video duration:', err);
-    patchedBlob = finalBlob;
-  }
-
-  const downloadUrl = URL.createObjectURL(patchedBlob);
-  const cleanTitle = (scenes[0]?.narration_text ? 'MachinaMind_Chapter_001' : 'MachinaMind_Video');
-  const filename = `${cleanTitle}_${quality}_${Date.now()}.${extension}`;
-
-  try {
-    audioCtx.close();
-  } catch {}
-
-  onProgress({
-    currentSceneIndex: scenes.length,
-    totalScenes: scenes.length,
-    percent: 100,
-    currentTimeSec: Math.round(totalDurationSec),
-    totalTimeSec: Math.round(totalDurationSec),
-    statusText: 'اكتمل الرندر وحقن توقيت أندرويد وواتساب بنجاح! جاري التنزيل المباشر...',
-  });
-
-  // Automatically trigger download
-  if (typeof document !== 'undefined') {
-    try {
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        try {
-          document.body.removeChild(a);
-        } catch {}
-      }, 1000);
-    } catch (e) {
-      console.warn('Auto download error, user can use manual download:', e);
-    }
-  }
+  const url = URL.createObjectURL(patchedBlob);
+  const filename = `Mindplicit_${options?.channelName || 'MachinaMind'}_${Date.now()}.${extension}`;
 
   return {
     blob: patchedBlob,
-    url: downloadUrl,
+    url,
     filename,
-    durationSec: totalDurationSec,
+    durationSec: Math.round(totalDurationSec),
     sizeBytes: patchedBlob.size,
-    mimeType,
+    mimeType: patchedBlob.type || mimeType,
+    engine: 'browser_canvas',
   };
 }

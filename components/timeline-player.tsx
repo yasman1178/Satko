@@ -89,10 +89,10 @@ export function TimelinePlayer({
   const currentSceneDuration = currentScene?.duration_seconds || 4;
   const currentSceneElapsedSec = Math.max(0, sceneProgress * currentSceneDuration + subtitleOffset);
 
-  // Synchronized active word chunk calculations based on exact scene duration
+  // Synchronized active word chunk calculations based on exact scene duration and offset
   const timedChunks = useMemo(
-    () => calculateWeightedWordTiming(currentScene?.narration_text || '', currentSceneDuration),
-    [currentScene?.narration_text, currentSceneDuration]
+    () => calculateWeightedWordTiming(currentScene?.narration_text || '', currentSceneDuration, subtitleOffset),
+    [currentScene?.narration_text, currentSceneDuration, subtitleOffset]
   );
 
   const activeChunk = useMemo(() => {

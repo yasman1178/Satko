@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 -H 0.0.0.0",
-    "build": "next build",
+    "build": "node scripts/patch-next.js && next build",
     "start": "next start",
     "lint": "eslint .",
-    "clean": "next clean"
+    "clean": "next clean",
+    "postinstall": "node scripts/patch-next.js"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
