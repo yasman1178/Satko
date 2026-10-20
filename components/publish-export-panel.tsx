@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { ProjectData, PublishInfo } from '@/types/project';
 import {
   Share2,
@@ -15,8 +15,19 @@ import {
   Tag,
   Loader2,
   CheckCircle2,
+  AlertCircle,
+  StopCircle,
+  Play,
+  RotateCcw,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import {
+  renderProjectVideo,
+  VideoQuality,
+  QUALITY_PRESETS,
+  RenderProgress,
+  RenderResult,
+} from '@/lib/video-renderer';
 
 interface PublishExportPanelProps {
   project: ProjectData;
@@ -26,8 +37,15 @@ interface PublishExportPanelProps {
 export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPanelProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [isGeneratingPack, setIsGeneratingPack] = useState(false);
+
+  // Video Rendering States
+  const [selectedQuality, setSelectedQuality] = useState<VideoQuality>('1080p');
   const [isExportingVideo, setIsExportingVideo] = useState(false);
-  const [exportProgress, setExportProgress] = useState(0);
+  const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
+  const [renderedResult, setRenderedResult] = useState<RenderResult | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const publishData: PublishInfo = project.publish || {
     title_options: [
@@ -72,27 +90,69 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
     }
   };
 
-  // Simulated browser video render pipeline
-  const handleRenderVideo = () => {
-    setIsExportingVideo(true);
-    setExportProgress(10);
+  const scenes = project.chapters[0]?.scenes || [];
+  const readyAudioCount = scenes.filter((s) => s.audio_status === 'ready' && s.audio_url).length;
+  const totalDuration = scenes.reduce((sum, s) => sum + (s.duration_seconds || 3.8), 0);
 
-    const interval = setInterval(() => {
-      setExportProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setIsExportingVideo(false);
-          confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-          return 100;
-        }
-        return prev + 15;
-      });
-    }, 400);
+  // Real in-browser video render pipeline
+  const handleStartRender = async () => {
+    if (scenes.length === 0) return;
+
+    setIsExportingVideo(true);
+    setRenderError(null);
+    setRenderProgress({
+      currentSceneIndex: 0,
+      totalScenes: scenes.length,
+      percent: 1,
+      currentTimeSec: 0,
+      totalTimeSec: Math.round(totalDuration),
+      statusText: 'بدء تهيئة محرك الرندر والصوتيات...',
+    });
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    try {
+      const result = await renderProjectVideo(
+        scenes,
+        selectedQuality,
+        (progress) => {
+          setRenderProgress(progress);
+        },
+        abortController.signal
+      );
+
+      setRenderedResult(result);
+      confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+    } catch (err: any) {
+      if (err?.message?.includes('إلغاء') || abortController.signal.aborted) {
+        setRenderError('تم إيقاف عملية الرندر بناءً على طلبك.');
+      } else {
+        console.error('Video Render Error:', err);
+        setRenderError(err?.message || 'حدث خطأ أثناء رندر الفيديو');
+      }
+    } finally {
+      setIsExportingVideo(false);
+      abortControllerRef.current = null;
+    }
   };
 
-  const scenes = project.chapters[0]?.scenes || [];
-  const readyAudioCount = scenes.filter((s) => s.audio_status === 'ready').length;
-  const totalDuration = scenes.reduce((sum, s) => sum + (s.duration_seconds || 4), 0);
+  const handleAbortRender = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setIsExportingVideo(false);
+  };
+
+  const handleManualDownload = () => {
+    if (!renderedResult) return;
+    const a = document.createElement('a');
+    a.href = renderedResult.url;
+    a.download = renderedResult.filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => document.body.removeChild(a), 1000);
+  };
 
   return (
     <div className="space-y-6">
@@ -109,7 +169,7 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
               </h2>
             </div>
             <p className="text-xs text-slate-400">
-              عناوين مدروسة لزيادة نسبة النقر (CTR)، وصف مُحسّن لمحركات البحث، تاجات، وبرومبت الغلاف المصغر.
+              رندر الفيديو الحقيقي بـ 3 باقات جودة، مع عناوين عالية الـ CTR، ووصف محسن لمحركات البحث، وتاجات جاهزة.
             </p>
           </div>
 
@@ -230,55 +290,184 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
           </div>
         </div>
 
-        {/* Right Column: Tags, Thumbnail Prompt, & Video Render */}
+        {/* Right Column: Video Render Engine with 3 Quality Options */}
         <div className="space-y-5">
           {/* Video Render Card */}
           <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 space-y-4">
-            <div className="flex items-center gap-2 text-xs font-semibold text-white">
-              <Video className="h-4 w-4 text-amber-400" />
-              <span>جاهزية التصدير (Video Assembly)</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-semibold text-white">
+                <Video className="h-4 w-4 text-amber-400" />
+                <span>محرك رندر وتصدير الفيديو الفعلي</span>
+              </div>
+              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                تسجيل حي مباشر
+              </span>
             </div>
 
-            <div className="space-y-2 text-xs">
+            {/* Quality Preset Selector (3 Qualities) */}
+            <div className="space-y-2">
+              <label className="block text-xs font-medium text-slate-300">
+                اختر دقة وجودة الفيديو المطلوب (Video Quality):
+              </label>
+
+              <div className="grid grid-cols-1 gap-2">
+                {(Object.keys(QUALITY_PRESETS) as VideoQuality[]).map((qKey) => {
+                  const q = QUALITY_PRESETS[qKey];
+                  const isSelected = selectedQuality === qKey;
+
+                  return (
+                    <button
+                      key={qKey}
+                      type="button"
+                      disabled={isExportingVideo}
+                      onClick={() => setSelectedQuality(qKey)}
+                      className={`w-full text-right p-3 rounded-lg border transition-all ${
+                        isSelected
+                          ? 'border-amber-400 bg-amber-500/10 shadow-sm'
+                          : 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold text-white flex items-center gap-2">
+                          <span
+                            className={`h-2 w-2 rounded-full ${
+                              isSelected ? 'bg-amber-400' : 'bg-slate-600'
+                            }`}
+                          />
+                          {q.label}
+                        </span>
+                        <span className="text-[10px] font-mono text-amber-400/90 bg-amber-400/10 px-1.5 py-0.5 rounded">
+                          {q.badge}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mr-4">
+                        {q.description} ({q.fps}fps · {q.bitrate / 1_000_000}Mbps)
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Stats summary */}
+            <div className="space-y-2 text-xs pt-1">
               <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
-                <span>المشاهد الصوتية</span>
+                <span>المشاهد الصوتية الجاهزة</span>
                 <span className="font-mono tabular-nums font-bold text-amber-400">
                   {readyAudioCount} / {scenes.length}
                 </span>
               </div>
               <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
-                <span>المدة الإجمالية</span>
+                <span>المدة الزمنية للفيديو</span>
                 <span className="font-mono tabular-nums text-slate-200">
                   {Math.floor(totalDuration / 60)} د و {Math.round(totalDuration % 60)} ث
                 </span>
               </div>
               <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
-                <span>الدقة والنسبة</span>
-                <span className="font-mono text-slate-200">1080p (16:9)</span>
+                <span>الدقة المختارة</span>
+                <span className="font-mono text-amber-400 font-bold">
+                  {QUALITY_PRESETS[selectedQuality].width}x{QUALITY_PRESETS[selectedQuality].height} ({selectedQuality})
+                </span>
               </div>
             </div>
 
+            {/* Render Progress or Buttons */}
             {isExportingVideo ? (
-              <div className="space-y-2 pt-2">
-                <div className="flex justify-between text-xs text-slate-300">
-                  <span>جارِ تجميع وتركيب الفيديو...</span>
-                  <span className="font-mono font-bold text-amber-400">{exportProgress}%</span>
+              <div className="space-y-3 pt-2">
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs text-slate-200">
+                    <span className="flex items-center gap-1.5 text-amber-400">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>{renderProgress?.statusText || 'جارِ الرندر...'}</span>
+                    </span>
+                    <span className="font-mono font-bold text-amber-400">
+                      {renderProgress?.percent || 0}%
+                    </span>
+                  </div>
+
+                  <div className="h-2.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-amber-500 to-amber-300 transition-all duration-200"
+                      style={{ width: `${renderProgress?.percent || 0}%` }}
+                    />
+                  </div>
+
+                  <div className="flex justify-between text-[11px] text-slate-400 font-mono">
+                    <span>
+                      المشهد {renderProgress?.currentSceneIndex || 0} / {renderProgress?.totalScenes || scenes.length}
+                    </span>
+                    <span>
+                      {renderProgress?.currentTimeSec || 0}ث / {renderProgress?.totalTimeSec || Math.round(totalDuration)}ث
+                    </span>
+                  </div>
                 </div>
-                <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-amber-400 transition-all duration-300"
-                    style={{ width: `${exportProgress}%` }}
-                  />
-                </div>
+
+                <button
+                  onClick={handleAbortRender}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-600/40 text-xs transition-colors"
+                >
+                  <StopCircle className="h-3.5 w-3.5" />
+                  <span>إلغاء عملية الرندر</span>
+                </button>
               </div>
             ) : (
               <button
-                onClick={handleRenderVideo}
-                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs shadow-md transition-all active:scale-95"
+                onClick={handleStartRender}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg bg-gradient-to-r from-amber-400 to-amber-300 hover:from-amber-300 hover:to-amber-200 text-slate-950 font-bold text-xs shadow-lg transition-all active:scale-95"
               >
-                <Film className="h-4 w-4" />
-                <span>بدء رندر وتصدير الفيديو (Render MP4)</span>
+                <Film className="h-4 w-4 text-slate-950" />
+                <span>بدء رندر وتحميل الفيديو بدقة ({selectedQuality})</span>
               </button>
+            )}
+
+            {/* Error Message */}
+            {renderError && (
+              <div className="p-3 bg-red-950/60 border border-red-800/80 rounded-lg text-xs text-red-200 flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
+                <span>{renderError}</span>
+              </div>
+            )}
+
+            {/* Completed Rendered Video Preview & Download */}
+            {renderedResult && !isExportingVideo && (
+              <div className="space-y-3 pt-3 border-t border-slate-800">
+                <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400 bg-emerald-500/10 p-2.5 rounded-lg border border-emerald-500/20">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <span>تم إنتاج وتنزيل الفيديو بنجاح على جهازك!</span>
+                </div>
+
+                {/* Embedded Video Preview Player */}
+                <div className="rounded-lg overflow-hidden border border-slate-800 bg-black aspect-video relative">
+                  <video
+                    src={renderedResult.url}
+                    controls
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                  <span>الحجم: {(renderedResult.sizeBytes / (1024 * 1024)).toFixed(1)} MB</span>
+                  <span>المدة: {Math.round(renderedResult.durationSec)} ثانية</span>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleManualDownload}
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-colors"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span>تحميل الفيديو مرة أخرى</span>
+                  </button>
+
+                  <button
+                    onClick={handleStartRender}
+                    className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+                    title="إعادة الرندر"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
             )}
           </div>
 
