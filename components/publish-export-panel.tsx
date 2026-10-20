@@ -19,6 +19,8 @@ import {
   StopCircle,
   Play,
   RotateCcw,
+  Layers,
+  ListFilter,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import {
@@ -44,6 +46,13 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [renderedResult, setRenderedResult] = useState<RenderResult | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
+
+  // Scene Selection States
+  type SceneSelectionMode = 'all' | 'first3' | 'first5' | 'first10' | 'custom_count' | 'range';
+  const [sceneSelectionMode, setSceneSelectionMode] = useState<SceneSelectionMode>('all');
+  const [customCount, setCustomCount] = useState<number>(3);
+  const [rangeStart, setRangeStart] = useState<number>(1);
+  const [rangeEnd, setRangeEnd] = useState<number>(5);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -90,23 +99,51 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
     }
   };
 
-  const scenes = project.chapters[0]?.scenes || [];
-  const readyAudioCount = scenes.filter((s) => s.audio_status === 'ready' && s.audio_url).length;
-  const totalDuration = scenes.reduce((sum, s) => sum + (s.duration_seconds || 3.8), 0);
+  const allScenes = project.chapters[0]?.scenes || [];
+
+  // Compute chosen subset of scenes based on mode
+  const getSelectedScenes = () => {
+    if (allScenes.length === 0) return [];
+    switch (sceneSelectionMode) {
+      case 'first3':
+        return allScenes.slice(0, Math.min(3, allScenes.length));
+      case 'first5':
+        return allScenes.slice(0, Math.min(5, allScenes.length));
+      case 'first10':
+        return allScenes.slice(0, Math.min(10, allScenes.length));
+      case 'custom_count': {
+        const count = Math.max(1, Math.min(customCount || 1, allScenes.length));
+        return allScenes.slice(0, count);
+      }
+      case 'range': {
+        const start = Math.max(1, Math.min(rangeStart || 1, allScenes.length)) - 1;
+        const end = Math.max(start + 1, Math.min(rangeEnd || allScenes.length, allScenes.length));
+        return allScenes.slice(start, end);
+      }
+      case 'all':
+      default:
+        return allScenes;
+    }
+  };
+
+  const selectedScenes = getSelectedScenes();
+  const selectedReadyAudioCount = selectedScenes.filter((s) => s.audio_status === 'ready' && s.audio_url).length;
+  const selectedTotalDuration = selectedScenes.reduce((sum, s) => sum + (s.duration_seconds || 3.8), 0);
 
   // Real in-browser video render pipeline
   const handleStartRender = async () => {
-    if (scenes.length === 0) return;
+    const scenesToRender = getSelectedScenes();
+    if (scenesToRender.length === 0) return;
 
     setIsExportingVideo(true);
     setRenderError(null);
     setRenderProgress({
       currentSceneIndex: 0,
-      totalScenes: scenes.length,
+      totalScenes: scenesToRender.length,
       percent: 1,
       currentTimeSec: 0,
-      totalTimeSec: Math.round(totalDuration),
-      statusText: 'بدء تهيئة محرك الرندر والصوتيات...',
+      totalTimeSec: Math.round(selectedTotalDuration),
+      statusText: `بدء تهيئة محرك الرندر لـ ${scenesToRender.length} مشهد...`,
     });
 
     const abortController = new AbortController();
@@ -114,7 +151,7 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
 
     try {
       const result = await renderProjectVideo(
-        scenes,
+        scenesToRender,
         selectedQuality,
         (progress) => {
           setRenderProgress(progress);
@@ -349,18 +386,161 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
               </div>
             </div>
 
+            {/* Scene Selection Mode */}
+            <div className="space-y-3 p-3.5 rounded-lg border border-slate-800 bg-slate-950/90">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Layers className="h-3.5 w-3.5 text-amber-400" />
+                  <span>تحديد المشاهد للرندر (Scene Selection):</span>
+                </label>
+                <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20">
+                  {selectedScenes.length} من {allScenes.length} مشهد
+                </span>
+              </div>
+
+              {/* Mode Buttons Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                <button
+                  type="button"
+                  disabled={isExportingVideo}
+                  onClick={() => setSceneSelectionMode('all')}
+                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
+                    sceneSelectionMode === 'all'
+                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
+                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  الكل ({allScenes.length} مشهد)
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isExportingVideo}
+                  onClick={() => setSceneSelectionMode('first3')}
+                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
+                    sceneSelectionMode === 'first3'
+                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
+                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  ⚡ تجربة سريعة (أول 3)
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isExportingVideo}
+                  onClick={() => setSceneSelectionMode('first5')}
+                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
+                    sceneSelectionMode === 'first5'
+                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
+                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  أول 5 مشاهد
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isExportingVideo}
+                  onClick={() => setSceneSelectionMode('first10')}
+                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
+                    sceneSelectionMode === 'first10'
+                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
+                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  أول 10 مشاهد
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isExportingVideo}
+                  onClick={() => setSceneSelectionMode('custom_count')}
+                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
+                    sceneSelectionMode === 'custom_count'
+                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
+                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  🔢 عدد مخصص
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isExportingVideo}
+                  onClick={() => setSceneSelectionMode('range')}
+                  className={`text-center py-2 px-2 rounded text-xs font-medium border transition-all ${
+                    sceneSelectionMode === 'range'
+                      ? 'bg-amber-400 text-slate-950 font-bold border-amber-400 shadow-sm'
+                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  🎯 نطاق مخصص
+                </button>
+              </div>
+
+              {/* Sub-inputs for custom count or range */}
+              {sceneSelectionMode === 'custom_count' && (
+                <div className="flex items-center gap-2 p-2 bg-slate-900/90 rounded border border-slate-800 text-xs">
+                  <span className="text-slate-300">أول عدد من المشاهد:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={allScenes.length}
+                    value={customCount}
+                    disabled={isExportingVideo}
+                    onChange={(e) => setCustomCount(Math.max(1, Math.min(Number(e.target.value) || 1, allScenes.length)))}
+                    className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-amber-400 font-mono font-bold text-center text-xs focus:outline-none focus:border-amber-400"
+                  />
+                  <span className="text-slate-400 text-[11px]">من إجمالي {allScenes.length}</span>
+                </div>
+              )}
+
+              {sceneSelectionMode === 'range' && (
+                <div className="flex items-center gap-2 p-2 bg-slate-900/90 rounded border border-slate-800 text-xs">
+                  <span className="text-slate-300">من مشهد:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={allScenes.length}
+                    value={rangeStart}
+                    disabled={isExportingVideo}
+                    onChange={(e) => setRangeStart(Math.max(1, Math.min(Number(e.target.value) || 1, allScenes.length)))}
+                    className="w-16 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-amber-400 font-mono font-bold text-center text-xs focus:outline-none focus:border-amber-400"
+                  />
+                  <span className="text-slate-300">إلى مشهد:</span>
+                  <input
+                    type="number"
+                    min={rangeStart}
+                    max={allScenes.length}
+                    value={rangeEnd}
+                    disabled={isExportingVideo}
+                    onChange={(e) => setRangeEnd(Math.max(rangeStart, Math.min(Number(e.target.value) || rangeStart, allScenes.length)))}
+                    className="w-16 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-amber-400 font-mono font-bold text-center text-xs focus:outline-none focus:border-amber-400"
+                  />
+                  <span className="text-slate-400 text-[11px]">({selectedScenes.length} مشاهد)</span>
+                </div>
+              )}
+            </div>
+
             {/* Stats summary */}
             <div className="space-y-2 text-xs pt-1">
               <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
-                <span>المشاهد الصوتية الجاهزة</span>
+                <span>المشاهد المحددة للرندر</span>
                 <span className="font-mono tabular-nums font-bold text-amber-400">
-                  {readyAudioCount} / {scenes.length}
+                  {selectedScenes.length} مشهد (من أصل {allScenes.length})
                 </span>
               </div>
               <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
-                <span>المدة الزمنية للفيديو</span>
+                <span>المشاهد الصوتية الجاهزة</span>
+                <span className="font-mono tabular-nums font-bold text-emerald-400">
+                  {selectedReadyAudioCount} / {selectedScenes.length}
+                </span>
+              </div>
+              <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
+                <span>المدة المقدرة للرندر</span>
                 <span className="font-mono tabular-nums text-slate-200">
-                  {Math.floor(totalDuration / 60)} د و {Math.round(totalDuration % 60)} ث
+                  {Math.floor(selectedTotalDuration / 60)} د و {Math.round(selectedTotalDuration % 60)} ث ({Math.round(selectedTotalDuration)} ثانية)
                 </span>
               </div>
               <div className="flex justify-between p-2 bg-slate-950 rounded border border-slate-800 text-slate-300">
@@ -400,10 +580,10 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
 
                   <div className="flex justify-between text-[11px] text-slate-400 font-mono">
                     <span>
-                      المشهد {renderProgress?.currentSceneIndex || 0} / {renderProgress?.totalScenes || scenes.length}
+                      المشهد {renderProgress?.currentSceneIndex || 0} / {renderProgress?.totalScenes || selectedScenes.length}
                     </span>
                     <span>
-                      {renderProgress?.currentTimeSec || 0}ث / {renderProgress?.totalTimeSec || Math.round(totalDuration)}ث
+                      {renderProgress?.currentTimeSec || 0}ث / {renderProgress?.totalTimeSec || Math.round(selectedTotalDuration)}ث
                     </span>
                   </div>
                 </div>
@@ -422,7 +602,7 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
                 className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg bg-gradient-to-r from-amber-400 to-amber-300 hover:from-amber-300 hover:to-amber-200 text-slate-950 font-bold text-xs shadow-lg transition-all active:scale-95"
               >
                 <Film className="h-4 w-4 text-slate-950" />
-                <span>بدء رندر وتحميل الفيديو بدقة ({selectedQuality})</span>
+                <span>رندر {selectedScenes.length} مشهد ({Math.round(selectedTotalDuration)}ث) بدقة {selectedQuality}</span>
               </button>
             )}
 

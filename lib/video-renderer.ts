@@ -555,19 +555,52 @@ export async function renderProjectVideo(
     statusText: 'جارِ إتمام وتجميع ملف الفيديو وحقن بيانات التوقيت لهواتف أندرويد وواتساب...',
   });
 
-  // Brief flush delay before stopping recorder
-  await new Promise((r) => setTimeout(r, 400));
-  recorder.stop();
+  // Brief flush delay before stopping recorder and request data
+  await new Promise((r) => setTimeout(r, 300));
+  try {
+    if (recorder.state === 'recording') {
+      recorder.requestData();
+    }
+  } catch {}
 
-  const finalBlob = await recorderStoppedPromise;
+  await new Promise((r) => setTimeout(r, 100));
 
-  // Patch Duration metadata so mobile players (Android Gallery / WhatsApp / Google Photos) show accurate duration
+  if (recorder.state !== 'inactive') {
+    try {
+      recorder.stop();
+    } catch {}
+  }
+
+  // Safety race timeout: wait up to 2500ms for recorderStoppedPromise, otherwise construct blob from collected chunks
+  const finalBlob = await Promise.race([
+    recorderStoppedPromise,
+    new Promise<Blob>((resolve) =>
+      setTimeout(() => {
+        resolve(new Blob(chunks, { type: mimeType }));
+      }, 2500)
+    ),
+  ]);
+
+  // Stop all active tracks to free browser resources
+  try {
+    combinedStream.getTracks().forEach((track) => track.stop());
+  } catch {}
+
+  // Patch Duration metadata with timeout protection (never hangs UI)
   let patchedBlob = finalBlob;
   try {
     const formatType = (extension === 'mp4' || finalBlob.type.includes('mp4')) ? 'mp4' : 'webm';
-    patchedBlob = await patchVideoDuration(finalBlob, totalDurationSec, formatType);
+    const patchPromise = patchVideoDuration(finalBlob, totalDurationSec, formatType);
+    const patchTimeout = new Promise<Blob>((resolve) =>
+      setTimeout(() => {
+        console.warn('Duration patch timed out, using original blob');
+        resolve(finalBlob);
+      }, 3000)
+    );
+    patchedBlob = await Promise.race([patchPromise, patchTimeout]);
   } catch (err) {
     console.warn('Error patching video duration:', err);
+    patchedBlob = finalBlob;
   }
 
   const downloadUrl = URL.createObjectURL(patchedBlob);
@@ -589,14 +622,20 @@ export async function renderProjectVideo(
 
   // Automatically trigger download
   if (typeof document !== 'undefined') {
-    const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      document.body.removeChild(a);
-    }, 1000);
+    try {
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        try {
+          document.body.removeChild(a);
+        } catch {}
+      }, 1000);
+    } catch (e) {
+      console.warn('Auto download error, user can use manual download:', e);
+    }
   }
 
   return {
