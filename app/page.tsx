@@ -56,6 +56,7 @@ export default function Home() {
               audio_url: cachedAudio?.url || sc.audio_url,
               duration_seconds: cachedAudio?.duration || sc.duration_seconds,
               audio_status: cachedAudio?.url ? 'ready' : sc.audio_status || 'idle',
+              audio_voice: cachedAudio?.voice || sc.audio_voice,
               image_url: cachedImage || sc.image_url,
               image_status: cachedImage ? 'ready' : sc.image_status || 'missing',
             };
@@ -154,6 +155,7 @@ export default function Home() {
             audio_url: cachedAudio?.url || sc.audio_url,
             duration_seconds: cachedAudio?.duration || sc.duration_seconds,
             audio_status: cachedAudio?.url ? 'ready' : sc.audio_status || 'idle',
+            audio_voice: cachedAudio?.voice || sc.audio_voice,
             image_url: cachedImage || sc.image_url,
             image_status: cachedImage ? 'ready' : sc.image_status || 'missing',
           };

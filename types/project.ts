@@ -13,9 +13,10 @@ export interface Scene {
   audio_url?: string;
   audio_status?: 'idle' | 'generating' | 'ready' | 'error';
   audio_error?: string;
+  audio_voice?: string;
   image_url?: string;
   image_status?: 'missing' | 'ready';
-}
+};
 
 export interface Chapter {
   chapter_id: number;

@@ -194,13 +194,13 @@ export async function getAudioFromDB(sceneId: string): Promise<{ blob: Blob; dur
   }
 }
 
-export async function getAllAudioFromDB(): Promise<Map<string, { url: string; duration: number }>> {
-  const map = new Map<string, { url: string; duration: number }>();
+export async function getAllAudioFromDB(): Promise<Map<string, { url: string; duration: number; voice?: string }>> {
+  const map = new Map<string, { url: string; duration: number; voice?: string }>();
 
   // Add memory items first
   memoryAudio.forEach((val, key) => {
     try {
-      map.set(key, { url: URL.createObjectURL(val.blob), duration: val.duration });
+      map.set(key, { url: URL.createObjectURL(val.blob), duration: val.duration, voice: val.voice });
     } catch {}
   });
 
@@ -219,7 +219,7 @@ export async function getAllAudioFromDB(): Promise<Map<string, { url: string; du
             if (rec.blob) {
               try {
                 const url = URL.createObjectURL(rec.blob);
-                map.set(rec.scene_id, { url, duration: rec.duration || 0 });
+                map.set(rec.scene_id, { url, duration: rec.duration || 0, voice: rec.voice });
               } catch {}
             }
           }
@@ -232,6 +232,27 @@ export async function getAllAudioFromDB(): Promise<Map<string, { url: string; du
     });
   } catch {
     return map;
+  }
+}
+
+export async function clearAudioCacheFromDB(): Promise<void> {
+  memoryAudio.clear();
+  try {
+    const db = await getDB();
+    if (!db) return;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction('audio_cache', 'readwrite');
+        const store = tx.objectStore('audio_cache');
+        const req = store.clear();
+        req.onsuccess = () => resolve();
+        req.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  } catch {
+    // ignore
   }
 }
 

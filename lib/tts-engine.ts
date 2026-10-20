@@ -18,49 +18,75 @@ export async function synthesizeEdgeTTS(
   text: string,
   voice: string = 'en-GB-RyanNeural',
   rate: string = '-20%',
-  pitch: string = '+0Hz'
+  pitch: string = '+0Hz',
+  maxRetries: number = 3
 ): Promise<{ audioBuffer: Buffer; mimeType: string }> {
   // Normalize rate and pitch for SSML
   const cleanRate = rate.includes('%') ? rate : '-20%';
   const cleanPitch = pitch.includes('Hz') ? pitch : '+0Hz';
 
-  const tts = new MsEdgeTTS({ connectionTimeoutMs: 12000, synthesisTimeoutMs: 20000 });
+  let lastError: any = null;
 
-  try {
-    await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const tts = new MsEdgeTTS({ connectionTimeoutMs: 15000, synthesisTimeoutMs: 30000 });
 
-    const { audioStream } = tts.toStream(text, {
-      rate: cleanRate,
-      pitch: cleanPitch,
-    });
+    try {
+      await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
 
-    return await new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
-
-      audioStream.on('data', (chunk: Buffer) => {
-        chunks.push(chunk);
+      const { audioStream } = tts.toStream(text, {
+        rate: cleanRate,
+        pitch: cleanPitch,
       });
 
-      audioStream.on('end', () => {
-        const audioBuffer = Buffer.concat(chunks);
-        tts.close();
-        if (audioBuffer.length > 0) {
-          resolve({
-            audioBuffer,
-            mimeType: 'audio/mp3',
-          });
-        } else {
-          reject(new Error('Empty audio stream received from Edge-TTS'));
-        }
-      });
+      return await new Promise((resolve, reject) => {
+        const chunks: Buffer[] = [];
 
-      audioStream.on('error', (err: any) => {
-        tts.close();
-        reject(err);
+        audioStream.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+
+        audioStream.on('end', () => {
+          const audioBuffer = Buffer.concat(chunks);
+          try { tts.close(); } catch {}
+          if (audioBuffer.length > 0) {
+            resolve({
+              audioBuffer,
+              mimeType: 'audio/mp3',
+            });
+          } else {
+            reject(new Error('Empty audio stream received from Edge-TTS'));
+          }
+        });
+
+        audioStream.on('error', (err: any) => {
+          try { tts.close(); } catch {}
+          reject(err);
+        });
       });
-    });
-  } catch (err: any) {
-    try { tts.close(); } catch {}
-    throw new Error(`Edge-TTS generation error: ${err.message || 'unknown error'}`);
+    } catch (err: any) {
+      try { tts.close(); } catch {}
+      lastError = err;
+      const is429 =
+        err?.message?.includes('429') ||
+        err?.message?.includes('rate') ||
+        err?.message?.includes('Unexpected server response: 429');
+
+      if (attempt < maxRetries && is429) {
+        const backoffMs = (attempt + 1) * 2500;
+        console.warn(`[Edge-TTS] Rate limited (429) on attempt ${attempt + 1}/${maxRetries}. Retrying in ${backoffMs}ms...`);
+        await new Promise((r) => setTimeout(r, backoffMs));
+        continue;
+      }
+
+      if (attempt < maxRetries && !is429) {
+        // Transient socket error, brief wait and retry
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+      break;
+    }
   }
+
+  throw new Error(`Edge-TTS generation error: ${lastError?.message || 'unknown error'}`);
 }
+
