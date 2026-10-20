@@ -371,8 +371,8 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
               </div>
               <div className="flex items-center justify-between p-2 bg-slate-950 rounded border border-slate-800 text-[11px] text-slate-400">
                 <span>الميزات المطبقة:</span>
-                <span className="font-medium text-emerald-400">
-                  ترجمة مضاعفة 2X · تثبيت مدة الموبايل
+                <span className="font-medium text-amber-400 flex items-center gap-1">
+                  <span className="text-emerald-400 font-bold">✓</span> ترجمة ريلز ضخمة 72px · ترويسة أندرويد وواتساب
                 </span>
               </div>
             </div>

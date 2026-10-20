@@ -2,7 +2,7 @@
 
 import { Scene, MotionType } from '@/types/project';
 import { splitTextIntoWordChunks, TimedWordChunk } from '@/components/timeline-player';
-import { fixWebmDuration } from '@/lib/webm-duration-fixer';
+import { patchVideoDuration } from '@/lib/video-duration-patcher';
 
 export type VideoQuality = '1080p' | '720p' | '480p';
 
@@ -21,12 +21,12 @@ export const QUALITY_PRESETS: Record<VideoQuality, QualityConfig> = {
   '1080p': {
     id: '1080p',
     label: '1080p Full HD (عالية)',
-    badge: 'موصى به لليوتيوب',
+    badge: 'موصى به لليوتيوب وريلز',
     width: 1920,
     height: 1080,
     fps: 30,
     bitrate: 8_500_000,
-    description: 'دقة فائقة ونقاء كريستالي مع تفاصيل بارزة (1920x1080)',
+    description: 'دقة فائقة ونقاء كريستالي مع تفاصيل بارزة وترجمة ضخمة (1920x1080)',
   },
   '720p': {
     id: '720p',
@@ -114,7 +114,7 @@ async function preloadImage(url?: string): Promise<HTMLImageElement | null> {
 async function loadAudioBuffer(
   audioCtx: AudioContext,
   url?: string,
-  fallbackDuration: number = 3.5
+  fallbackDuration: number = 3.8
 ): Promise<AudioBuffer> {
   if (url) {
     try {
@@ -133,7 +133,9 @@ async function loadAudioBuffer(
 }
 
 /**
- * Detects the best supported MediaRecorder MIME type
+ * Detects the best supported MediaRecorder MIME type.
+ * Prioritizes WebM with VP9/VP8 for guaranteed browser rendering consistency and
+ * flawless compatibility with Android Gallery / WhatsApp via injected EBML Duration metadata.
  */
 function getBestSupportedMimeType(): { mimeType: string; extension: string } {
   if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') {
@@ -141,12 +143,12 @@ function getBestSupportedMimeType(): { mimeType: string; extension: string } {
   }
 
   const candidateTypes = [
-    { type: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
-    { type: 'video/mp4;codecs=avc1', ext: 'mp4' },
-    { type: 'video/mp4', ext: 'mp4' },
     { type: 'video/webm;codecs=vp9,opus', ext: 'webm' },
     { type: 'video/webm;codecs=vp8,opus', ext: 'webm' },
     { type: 'video/webm', ext: 'webm' },
+    { type: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
+    { type: 'video/mp4;codecs=avc1', ext: 'mp4' },
+    { type: 'video/mp4', ext: 'mp4' },
   ];
 
   for (const candidate of candidateTypes) {
@@ -160,7 +162,7 @@ function getBestSupportedMimeType(): { mimeType: string; extension: string } {
 
 /**
  * Renders all project scenes sequentially onto a Canvas with synchronized audio tracks,
- * Ken Burns camera animation, MachinaMind channel badge, and active 3-5 word subtitles.
+ * Ken Burns camera animation, MachinaMind channel badge, and huge Reels-style high-contrast subtitles.
  */
 export async function renderProjectVideo(
   scenes: Scene[],
@@ -369,87 +371,72 @@ export async function renderProjectVideo(
 
         ctx.drawImage(imageElement, drawX, drawY, drawW, drawH);
       } else {
-        // Renaissance dark baroque procedural gradient
-        const grad = ctx.createRadialGradient(
+        // Fallback procedural cinematic gradient
+        const bgGrad = ctx.createRadialGradient(
           width / 2,
           height / 2,
-          100 * scaleRatio,
+          width * 0.1,
           width / 2,
           height / 2,
           width * 0.7
         );
-        grad.addColorStop(0, '#1E293B');
-        grad.addColorStop(0.6, '#0F172A');
-        grad.addColorStop(1, '#05070D');
-        ctx.fillStyle = grad;
+        bgGrad.addColorStop(0, '#1E293B');
+        bgGrad.addColorStop(1, '#0B0F17');
+        ctx.fillStyle = bgGrad;
         ctx.fillRect(0, 0, width, height);
-
-        // Golden frame
-        ctx.strokeStyle = 'rgba(217, 119, 6, 0.25)';
-        ctx.lineWidth = 4 * scaleRatio;
-        ctx.strokeRect(40 * scaleRatio, 40 * scaleRatio, width - 80 * scaleRatio, height - 80 * scaleRatio);
-
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.9)';
-        ctx.font = `bold ${Math.round(36 * scaleRatio)}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.fillText(`مشهد ${scene.scene_id}`, width / 2, height / 2 - 20 * scaleRatio);
       }
       ctx.restore();
 
-      // ─── Vignette Overlay ───
+      // Cinematic Vignette
       const vignette = ctx.createRadialGradient(
         width / 2,
         height / 2,
-        height * 0.4,
+        width * 0.35,
         width / 2,
         height / 2,
-        width * 0.8
+        width * 0.75
       );
-      vignette.addColorStop(0, 'rgba(0,0,0,0)');
-      vignette.addColorStop(1, 'rgba(0,0,0,0.6)');
+      vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+      vignette.addColorStop(1, 'rgba(0, 0, 0, 0.75)');
       ctx.fillStyle = vignette;
       ctx.fillRect(0, 0, width, height);
 
-      // ─── MachinaMind Channel Watermark (Top-Right) ───
+      // ─── MachinaMind Channel Badge (Top Left) ───
       ctx.save();
-      const badgeW = Math.round(240 * scaleRatio);
-      const badgeH = Math.round(52 * scaleRatio);
-      const badgeX = width - badgeW - Math.round(48 * scaleRatio);
+      const badgeX = Math.round(40 * scaleRatio);
       const badgeY = Math.round(36 * scaleRatio);
-      const radius = Math.round(12 * scaleRatio);
+      const badgeW = Math.round(230 * scaleRatio);
+      const badgeH = Math.round(52 * scaleRatio);
 
-      ctx.fillStyle = 'rgba(9, 13, 22, 0.85)';
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
-      ctx.lineWidth = Math.max(1, 2 * scaleRatio);
-      drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, radius);
+      ctx.fillStyle = 'rgba(11, 15, 23, 0.88)';
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+      ctx.lineWidth = Math.max(1.5, 2 * scaleRatio);
+      drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 12 * scaleRatio);
       ctx.fill();
       ctx.stroke();
 
-      // Gold emblem with letter 'M'
-      const emblemSize = Math.round(32 * scaleRatio);
-      const emblemX = badgeX + Math.round(14 * scaleRatio);
-      const emblemY = badgeY + (badgeH - emblemSize) / 2;
+      // Brand Icon (Golden Diamond)
       ctx.fillStyle = '#F59E0B';
-      drawRoundRect(ctx, emblemX, emblemY, emblemSize, emblemSize, Math.round(6 * scaleRatio));
+      const iconSize = Math.round(18 * scaleRatio);
+      const iconCenterX = badgeX + Math.round(24 * scaleRatio);
+      const iconCenterY = badgeY + badgeH / 2;
+      ctx.beginPath();
+      ctx.moveTo(iconCenterX, iconCenterY - iconSize / 2);
+      ctx.lineTo(iconCenterX + iconSize / 2, iconCenterY);
+      ctx.lineTo(iconCenterX, iconCenterY + iconSize / 2);
+      ctx.lineTo(iconCenterX - iconSize / 2, iconCenterY);
+      ctx.closePath();
       ctx.fill();
 
-      ctx.fillStyle = '#090D16';
-      ctx.font = `bold ${Math.round(20 * scaleRatio)}px "Plus Jakarta Sans", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('M', emblemX + emblemSize / 2, emblemY + emblemSize / 2);
-
-      // Channel Name text
+      // Brand Text
       ctx.fillStyle = '#FFFFFF';
-      ctx.font = `bold ${Math.round(22 * scaleRatio)}px "Plus Jakarta Sans", sans-serif`;
+      ctx.font = `bold ${Math.round(20 * scaleRatio)}px "Plus Jakarta Sans", sans-serif`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.shadowColor = 'rgba(0,0,0,0.85)';
-      ctx.shadowBlur = 8 * scaleRatio;
-      ctx.fillText('MachinaMind', emblemX + emblemSize + Math.round(12 * scaleRatio), badgeY + badgeH / 2);
+      ctx.fillText('MachinaMind', iconCenterX + Math.round(16 * scaleRatio), iconCenterY);
       ctx.restore();
 
-      // ─── Active 3-5 Word Subtitle Chunk (Bottom Center) ───
+      // ─── Active Reels-Style Huge Subtitle Chunk (Bottom Center) ───
       // Apply offset calibration (-350ms lead time)
       const adjustedTimeSec = Math.max(0, sceneElapsedSec + 0.35);
       const adjustedProgress = Math.min(1.0, adjustedTimeSec / durationSec);
@@ -461,45 +448,64 @@ export async function renderProjectVideo(
 
       if (activeChunk && activeChunk.text) {
         // Deep Gradient Scrim at bottom for crystal-clear readability
-        const scrimH = Math.round(260 * scaleRatio);
+        const scrimH = Math.round(360 * scaleRatio);
         const textScrim = ctx.createLinearGradient(0, height - scrimH, 0, height);
         textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
-        textScrim.addColorStop(0.35, 'rgba(0, 0, 0, 0.7)');
-        textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.96)');
+        textScrim.addColorStop(0.3, 'rgba(0, 0, 0, 0.75)');
+        textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.98)');
         ctx.fillStyle = textScrim;
         ctx.fillRect(0, height - scrimH, width, scrimH);
 
-        // 2X Doubled Subtitle Capsule (Doubled from 48px to 92px height, 42px font)
-        const subCardW = Math.round(Math.min(960 * scaleRatio, width * 0.76));
-        const subCardH = Math.round(92 * scaleRatio);
+        // Huge Reels-Style Subtitles (72px on 1080p, Black 900 weight, 12px solid black outline)
+        const fontSize = Math.round(72 * scaleRatio);
+        ctx.font = `900 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Plus Jakarta Sans", "Segoe UI", Roboto, sans-serif`;
+
+        const textToDraw = activeChunk.text.trim();
+        const measured = ctx.measureText(textToDraw);
+        const textW = measured.width;
+
+        const padX = Math.round(54 * scaleRatio);
+        const subCardW = Math.min(width * 0.92, Math.max(width * 0.68, textW + padX * 2));
+        const subCardH = Math.round(124 * scaleRatio);
         const subCardX = (width - subCardW) / 2;
-        const subCardY = height - Math.round(150 * scaleRatio);
+        const subCardY = height - Math.round(170 * scaleRatio);
 
         ctx.save();
-        ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
-        ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
-        ctx.lineWidth = Math.max(2, 2.5 * scaleRatio);
-        drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, subCardH / 2);
+        // High-contrast dark backdrop bar
+        ctx.fillStyle = 'rgba(7, 10, 18, 0.93)';
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)';
+        ctx.lineWidth = Math.max(3, 4 * scaleRatio);
+        drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, 20 * scaleRatio);
         ctx.fill();
         ctx.stroke();
 
-        // Active chunk text (Doubled font: 42px on 1080p, proportional on 720p/480p)
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = `bold ${Math.round(42 * scaleRatio)}px "Plus Jakarta Sans", sans-serif`;
+        const textCenterX = subCardX + subCardW / 2;
+        const textCenterY = subCardY + subCardH / 2 - Math.round(4 * scaleRatio);
+
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor = 'rgba(245, 158, 11, 0.6)';
-        ctx.shadowBlur = 16 * scaleRatio;
-        ctx.fillText(activeChunk.text.trim(), subCardX + subCardW / 2, subCardY + subCardH / 2);
 
-        // Subtle amber progress underline inside the capsule
+        // 1. Thick solid black outline for 100% contrast on mobile screens
+        ctx.lineJoin = 'round';
+        ctx.miterLimit = 2;
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = Math.max(8, Math.round(12 * scaleRatio));
+        ctx.strokeText(textToDraw, textCenterX, textCenterY);
+
+        // 2. Crisp bright white text fill with subtle gold shadow
+        ctx.fillStyle = '#FFFFFF';
+        ctx.shadowColor = 'rgba(245, 158, 11, 0.75)';
+        ctx.shadowBlur = Math.round(20 * scaleRatio);
+        ctx.fillText(textToDraw, textCenterX, textCenterY);
+
+        // 3. Golden dynamic progress underline inside the capsule
         const progBarW = subCardW - Math.round(60 * scaleRatio);
-        const progBarH = Math.max(2, Math.round(3.5 * scaleRatio));
+        const progBarH = Math.max(3, Math.round(5 * scaleRatio));
         const progBarX = subCardX + Math.round(30 * scaleRatio);
-        const progBarY = subCardY + subCardH - Math.round(8 * scaleRatio);
+        const progBarY = subCardY + subCardH - Math.round(12 * scaleRatio);
 
         ctx.shadowBlur = 0;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
         ctx.fillRect(progBarX, progBarY, progBarW, progBarH);
 
         const chunkSpan = Math.max(0.001, activeChunk.endProgress - activeChunk.startProgress);
@@ -546,7 +552,7 @@ export async function renderProjectVideo(
     percent: 99,
     currentTimeSec: Math.round(totalDurationSec),
     totalTimeSec: Math.round(totalDurationSec),
-    statusText: 'جارِ إتمام وتجميع ملف الفيديو وحقن بيانات التوقيت للهواتف المحمولة...',
+    statusText: 'جارِ إتمام وتجميع ملف الفيديو وحقن بيانات التوقيت لهواتف أندرويد وواتساب...',
   });
 
   // Brief flush delay before stopping recorder
@@ -555,14 +561,13 @@ export async function renderProjectVideo(
 
   const finalBlob = await recorderStoppedPromise;
 
-  // Patch WebM Duration metadata so mobile players (Android / iOS / WhatsApp) show accurate duration
+  // Patch Duration metadata so mobile players (Android Gallery / WhatsApp / Google Photos) show accurate duration
   let patchedBlob = finalBlob;
-  if (extension === 'webm' || finalBlob.type.includes('webm')) {
-    try {
-      patchedBlob = await fixWebmDuration(finalBlob, Math.round(totalDurationSec * 1000));
-    } catch (err) {
-      console.warn('Error patching WebM duration:', err);
-    }
+  try {
+    const formatType = (extension === 'mp4' || finalBlob.type.includes('mp4')) ? 'mp4' : 'webm';
+    patchedBlob = await patchVideoDuration(finalBlob, totalDurationSec, formatType);
+  } catch (err) {
+    console.warn('Error patching video duration:', err);
   }
 
   const downloadUrl = URL.createObjectURL(patchedBlob);
@@ -579,7 +584,7 @@ export async function renderProjectVideo(
     percent: 100,
     currentTimeSec: Math.round(totalDurationSec),
     totalTimeSec: Math.round(totalDurationSec),
-    statusText: 'اكتمل الرندر وتثبيت توقيت الموبايل بنجاح! جاري التنزيل المباشر...',
+    statusText: 'اكتمل الرندر وحقن توقيت أندرويد وواتساب بنجاح! جاري التنزيل المباشر...',
   });
 
   // Automatically trigger download
