@@ -47,6 +47,10 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
   const [renderedResult, setRenderedResult] = useState<RenderResult | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
 
+  // Channel Branding & Watermark
+  const [channelBrandName, setChannelBrandName] = useState<string>('MachinaMind');
+  const [showWatermark, setShowWatermark] = useState<boolean>(true);
+
   // Scene Selection States
   type SceneSelectionMode = 'all' | 'first3' | 'first5' | 'first10' | 'custom_count' | 'range';
   const [sceneSelectionMode, setSceneSelectionMode] = useState<SceneSelectionMode>('first3');
@@ -156,7 +160,11 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
         (progress) => {
           setRenderProgress(progress);
         },
-        abortController.signal
+        abortController.signal,
+        {
+          channelName: channelBrandName.trim() || 'MachinaMind',
+          showWatermark,
+        }
       );
 
       setRenderedResult(result);
@@ -384,6 +392,56 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
                     </button>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* Channel Branding & Watermark Configuration */}
+            <div className="space-y-3 p-3.5 rounded-lg border border-slate-800 bg-slate-950/90">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Tag className="h-3.5 w-3.5 text-amber-400" />
+                  <span>هوية القناة والعلامة المائية (Dual Branding):</span>
+                </label>
+                <span className="text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">
+                  أعلى اليسار + أسفل اليمين
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    اسم القناة في الشارة العلوية (أعلى اليسار):
+                  </label>
+                  <input
+                    type="text"
+                    value={channelBrandName}
+                    disabled={isExportingVideo}
+                    onChange={(e) => setChannelBrandName(e.target.value)}
+                    placeholder="MachinaMind"
+                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-medium text-amber-300 placeholder-slate-600 focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
+                  <div className="flex flex-col">
+                    <span className="text-xs text-slate-300 font-medium">العلامة المائية (أسفل اليمين)</span>
+                    <span className="text-[10px] text-slate-500">حماية شفافة بنسبة 35% لضمان حقوق الفيديو</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isExportingVideo}
+                    onClick={() => setShowWatermark(!showWatermark)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      showWatermark ? 'bg-amber-500' : 'bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-slate-950 shadow ring-0 transition duration-200 ease-in-out ${
+                        showWatermark ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
 

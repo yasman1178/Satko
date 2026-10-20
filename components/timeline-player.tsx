@@ -15,82 +15,17 @@ import {
   Sliders,
 } from 'lucide-react';
 
-export interface TimedWordChunk {
-  text: string;
-  startProgress: number; // 0 to 1
-  endProgress: number;   // 0 to 1
-  wordCount: number;
-}
+import {
+  calculateWeightedWordTiming,
+  drawCinematicSubtitles,
+  drawBrandOverlays,
+  TimedWordChunk,
+} from '@/lib/video-renderer';
 
-/**
- * Splits scene narration text into punchy 3 to 5 word chunks based on natural pauses
- * and assigns proportional playback time based on word count.
- */
-export function splitTextIntoWordChunks(text: string): TimedWordChunk[] {
-  if (!text || !text.trim()) return [];
+export type { TimedWordChunk };
 
-  const rawWords = text.trim().split(/\s+/).filter(Boolean);
-  if (rawWords.length === 0) return [];
-
-  if (rawWords.length <= 4) {
-    return [{ text: rawWords.join(' '), startProgress: 0, endProgress: 1, wordCount: rawWords.length }];
-  }
-
-  const chunks: string[] = [];
-  let currentWords: string[] = [];
-
-  for (let i = 0; i < rawWords.length; i++) {
-    const word = rawWords[i];
-    currentWords.push(word);
-
-    const hasPause = /[,;:.!?؟—]$/.test(word);
-    const count = currentWords.length;
-    const remainingWords = rawWords.length - 1 - i;
-
-    // Break condition:
-    // - Reached 3+ words and hit a pause punctuation (and remaining is at least 2 words)
-    // - Reached 4 words and remaining is at least 3 words
-    // - Hit 5 words (strict maximum limit)
-    // - End of word list
-    const shouldBreak =
-      (count >= 3 && hasPause && remainingWords >= 2) ||
-      (count >= 4 && remainingWords >= 3) ||
-      count >= 5 ||
-      i === rawWords.length - 1;
-
-    if (shouldBreak) {
-      if (remainingWords === 1 && count < 5) {
-        continue;
-      }
-      chunks.push(currentWords.join(' '));
-      currentWords = [];
-    }
-  }
-
-  if (currentWords.length > 0) {
-    if (chunks.length > 0 && currentWords.length < 3) {
-      chunks[chunks.length - 1] = `${chunks[chunks.length - 1]} ${currentWords.join(' ')}`;
-    } else {
-      chunks.push(currentWords.join(' '));
-    }
-  }
-
-  const wordCounts = chunks.map((c) => Math.max(1, c.split(/\s+/).filter(Boolean).length));
-  const totalWords = wordCounts.reduce((acc, c) => acc + c, 0);
-
-  let currentStart = 0;
-  return chunks.map((chunkText, idx) => {
-    const fraction = wordCounts[idx] / totalWords;
-    const start = currentStart;
-    const end = idx === chunks.length - 1 ? 1.0 : Math.min(1.0, currentStart + fraction);
-    currentStart = end;
-    return {
-      text: chunkText,
-      startProgress: start,
-      endProgress: end,
-      wordCount: wordCounts[idx],
-    };
-  });
+export function splitTextIntoWordChunks(text: string, durationSec: number = 4.0): TimedWordChunk[] {
+  return calculateWeightedWordTiming(text, durationSec);
 }
 
 /**
@@ -144,52 +79,30 @@ export function TimelinePlayer({
   const [sceneProgress, setSceneProgress] = useState(0); // 0 to 1 inside current scene
   const [loadedImages, setLoadedImages] = useState<Map<string, HTMLImageElement>>(new Map());
 
-  // Subtitle timing calibration offset (default +350ms advance to eliminate audio lag)
-  const [subtitleOffset, setSubtitleOffset] = useState<number>(0.35);
+  // Subtitle timing calibration offset (default 0ms instantaneous exact audio sync)
+  const [subtitleOffset, setSubtitleOffset] = useState<number>(0);
   const [isCalibrationOpen, setIsCalibrationOpen] = useState<boolean>(false);
 
   const currentScene = scenes[activeSceneIndex] || scenes[0];
   const animationFrameRef = useRef<number | null>(null);
 
-  // Synchronized active word chunk (3 to 5 words) calculations
+  const currentSceneDuration = currentScene?.duration_seconds || 4;
+  const currentSceneElapsedSec = Math.max(0, sceneProgress * currentSceneDuration + subtitleOffset);
+
+  // Synchronized active word chunk calculations based on exact scene duration
   const timedChunks = useMemo(
-    () => splitTextIntoWordChunks(currentScene?.narration_text || ''),
-    [currentScene?.narration_text]
+    () => calculateWeightedWordTiming(currentScene?.narration_text || '', currentSceneDuration),
+    [currentScene?.narration_text, currentSceneDuration]
   );
-
-  // Calculate calibrated progress with the user-defined advance offset
-  const calibratedProgress = useMemo(() => {
-    const dur = currentScene?.duration_seconds || 4;
-    const offsetFraction = subtitleOffset / (dur || 1);
-    return Math.min(1, Math.max(0, sceneProgress + offsetFraction));
-  }, [sceneProgress, subtitleOffset, currentScene?.duration_seconds]);
-
-  const activeChunkIndex = useMemo(() => {
-    if (timedChunks.length === 0) return 0;
-    const idx = timedChunks.findIndex(
-      (s) => calibratedProgress >= s.startProgress && calibratedProgress < s.endProgress
-    );
-    if (idx !== -1) return idx;
-    return calibratedProgress >= 1 ? timedChunks.length - 1 : 0;
-  }, [timedChunks, calibratedProgress]);
 
   const activeChunk = useMemo(() => {
+    if (timedChunks.length === 0) return null;
     return (
-      timedChunks[activeChunkIndex] ||
-      timedChunks[0] || {
-        text: currentScene?.narration_text || '',
-        startProgress: 0,
-        endProgress: 1,
-        wordCount: 1,
-      }
+      timedChunks.find((c) => currentSceneElapsedSec >= c.startSec && currentSceneElapsedSec <= c.endSec) ||
+      timedChunks.find((c) => currentSceneElapsedSec < c.endSec) ||
+      timedChunks[timedChunks.length - 1]
     );
-  }, [timedChunks, activeChunkIndex, currentScene?.narration_text]);
-
-  const chunkSpan = Math.max(0.001, activeChunk.endProgress - activeChunk.startProgress);
-  const chunkInnerProgress = Math.min(
-    1,
-    Math.max(0, (calibratedProgress - activeChunk.startProgress) / chunkSpan)
-  );
+  }, [timedChunks, currentSceneElapsedSec]);
 
   // Calculate total timeline duration
   const totalDurationSec = scenes.reduce((sum, s) => sum + (s.duration_seconds || 4), 0);
@@ -199,7 +112,6 @@ export function TimelinePlayer({
     .slice(0, activeSceneIndex)
     .reduce((sum, s) => sum + (s.duration_seconds || 4), 0);
 
-  const currentSceneDuration = currentScene?.duration_seconds || 4;
   const totalElapsedSec = elapsedBeforeCurrent + sceneProgress * currentSceneDuration;
 
   // Preload images into memory for smooth canvas rendering
@@ -339,112 +251,14 @@ export function TimelinePlayer({
     ctx.fillStyle = vignette;
     ctx.fillRect(0, 0, width, height);
 
-    // ─────────────────────────────────────────────────────────────
-    // MachinaMind Channel Watermark on Video Canvas (Top-Right)
-    // ─────────────────────────────────────────────────────────────
-    ctx.save();
-    const badgeW = 240;
-    const badgeH = 52;
-    const badgeX = width - badgeW - 48;
-    const badgeY = 36;
-    const radius = 12;
+    const scaleRatio = width / 1920;
 
-    // Dark frosted background
-    ctx.fillStyle = 'rgba(9, 13, 22, 0.82)';
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
-    ctx.lineWidth = 2;
-    drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, radius);
-    ctx.fill();
-    ctx.stroke();
+    // Dual Branding: Top-Left Channel Badge & Bottom-Right Subtle Watermark
+    drawBrandOverlays(ctx, width, height, scaleRatio, 'MachinaMind', true);
 
-    // Gold emblem with letter 'M'
-    const emblemSize = 32;
-    const emblemX = badgeX + 14;
-    const emblemY = badgeY + (badgeH - emblemSize) / 2;
-    ctx.fillStyle = '#F59E0B';
-    drawRoundRect(ctx, emblemX, emblemY, emblemSize, emblemSize, 6);
-    ctx.fill();
-
-    ctx.fillStyle = '#090D16';
-    ctx.font = 'bold 20px "Plus Jakarta Sans", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('M', emblemX + emblemSize / 2, emblemY + emblemSize / 2);
-
-    // Channel Name text
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = 'bold 22px "Plus Jakarta Sans", sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.shadowColor = 'rgba(0,0,0,0.85)';
-    ctx.shadowBlur = 8;
-    ctx.fillText('MachinaMind', emblemX + emblemSize + 12, badgeY + badgeH / 2);
-    ctx.restore();
-
-    // ─────────────────────────────────────────────────────────────
-    // Active 3-5 Word Phrase Subtitles on Canvas (1/3 of Previous Size)
-    // ─────────────────────────────────────────────────────────────
-    if (showCaptions && activeChunk?.text) {
-      // Bottom subtle gradient scrim
-      const textScrim = ctx.createLinearGradient(0, height - 160, 0, height);
-      textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      textScrim.addColorStop(0.5, 'rgba(0, 0, 0, 0.65)');
-      textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.9)');
-      ctx.fillStyle = textScrim;
-      ctx.fillRect(0, height - 160, width, 160);
-
-      // Compact 1/3-size Subtitle Capsule on canvas
-      const subCardW = Math.min(480, width * 0.28);
-      const subCardH = 46;
-      const subCardX = (width - subCardW) / 2;
-      const subCardY = height - 110;
-
-      ctx.save();
-      ctx.fillStyle = 'rgba(9, 13, 22, 0.88)';
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
-      ctx.lineWidth = 1.5;
-      drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, 23);
-      ctx.fill();
-      ctx.stroke();
-
-      // Number badge circle
-      ctx.fillStyle = '#F59E0B';
-      ctx.beginPath();
-      ctx.arc(subCardX + 24, subCardY + 23, 11, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = '#090D16';
-      ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`${activeChunkIndex + 1}`, subCardX + 24, subCardY + 23);
-
-      // Active 3-5 words text (sharp, compact)
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 20px "Plus Jakarta Sans", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.shadowColor = 'rgba(245, 158, 11, 0.4)';
-      ctx.shadowBlur = 8;
-      ctx.fillText(activeChunk.text.trim(), subCardX + subCardW / 2 + 10, subCardY + 23);
-
-      // Hairline progress bar at bottom of capsule
-      const progBarW = subCardW - 40;
-      const progBarH = 2;
-      const progBarX = subCardX + 20;
-      const progBarY = subCardY + subCardH - 4;
-
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-      ctx.fillRect(progBarX, progBarY, progBarW, progBarH);
-
-      ctx.fillStyle = '#F59E0B';
-      const filledW = progBarW * chunkInnerProgress;
-      if (filledW > 0) {
-        ctx.fillRect(progBarX, progBarY, filledW, progBarH);
-      }
-
-      ctx.restore();
+    // Active Reels-Style Cinematic Floating Subtitles (Exact 1:1 Audio Sync)
+    if (showCaptions && activeChunk && activeChunk.text) {
+      drawCinematicSubtitles(ctx, activeChunk, currentSceneElapsedSec, width, height, scaleRatio);
     }
   }, [
     currentScene,
@@ -452,8 +266,7 @@ export function TimelinePlayer({
     sceneProgress,
     showCaptions,
     activeChunk,
-    activeChunkIndex,
-    chunkInnerProgress,
+    currentSceneElapsedSec,
   ]);
 
   // Main animation / timing tick with real-time 60fps audio clock sync
@@ -601,33 +414,6 @@ export function TimelinePlayer({
           </div>
         </div>
 
-        {/* Active 3-5 Words Dynamic Subtitle Capsule (1/3 of Previous Size, Non-Intrusive) */}
-        {showCaptions && activeChunk?.text && (
-          <div className="absolute bottom-11 sm:bottom-14 inset-x-2 flex justify-center pointer-events-none z-10">
-            <div className="max-w-[280px] sm:max-w-[340px] w-auto rounded-full bg-slate-950/92 backdrop-blur-md border border-amber-500/40 px-3 py-1 sm:px-4 sm:py-1.5 shadow-xl relative overflow-hidden transition-all duration-100 flex items-center gap-2">
-              <span className="flex-shrink-0 text-[9px] font-mono font-bold text-amber-400 bg-amber-500/15 px-1.5 py-0.5 rounded-full">
-                {activeChunkIndex + 1}/{timedChunks.length}
-              </span>
-
-              {/* Spoken 3-5 Words Text (Compact & Ultra-Sharp) */}
-              <p
-                className="text-xs sm:text-sm font-bold text-white tracking-wide truncate leading-tight drop-shadow font-sans"
-                dir="ltr"
-              >
-                {activeChunk.text}
-              </p>
-
-              {/* Hairline Progress Underline */}
-              <div className="absolute bottom-0 inset-x-0 h-[2px] bg-slate-800">
-                <div
-                  className="h-full bg-gradient-to-r from-amber-500 to-amber-300 transition-all duration-100"
-                  style={{ width: `${chunkInnerProgress * 100}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Bottom Floating Control Bar */}
         <div className="absolute bottom-0 inset-x-0 p-2.5 sm:p-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent flex flex-col gap-2 z-20">
           {/* Timeline scrub track */}
@@ -694,14 +480,14 @@ export function TimelinePlayer({
                 <button
                   onClick={() => setIsCalibrationOpen(!isCalibrationOpen)}
                   className={`flex items-center gap-1 px-1.5 py-0.5 sm:px-2 sm:py-1 text-[10px] sm:text-xs font-mono rounded-lg border transition-colors ${
-                    isCalibrationOpen || subtitleOffset !== 0.35
+                    isCalibrationOpen || subtitleOffset !== 0
                       ? 'border-amber-400 text-amber-300 bg-amber-500/15'
                       : 'border-slate-700 text-slate-400 hover:text-slate-200'
                   }`}
                   title="معايرة توقيت الترجمة (مزامنة الصوت)"
                 >
                   <Sliders className="h-3 w-3" />
-                  <span>{subtitleOffset >= 0 ? `+${Math.round(subtitleOffset * 1000)}ms` : `${Math.round(subtitleOffset * 1000)}ms`}</span>
+                  <span>{subtitleOffset > 0 ? `+${Math.round(subtitleOffset * 1000)}ms` : subtitleOffset < 0 ? `${Math.round(subtitleOffset * 1000)}ms` : 'تزامن 0ms'}</span>
                 </button>
 
                 {/* Calibration Dropdown / Popover */}
@@ -713,11 +499,11 @@ export function TimelinePlayer({
                         <span>معايرة تزامن الكلمات</span>
                       </span>
                       <button
-                        onClick={() => setSubtitleOffset(0.35)}
+                        onClick={() => setSubtitleOffset(0)}
                         className="text-[10px] text-slate-400 hover:text-amber-400 font-mono transition-colors"
-                        title="إعادة التعيين إلى +350ms"
+                        title="إعادة التعيين إلى 0ms (تزامن لحظي)"
                       >
-                        افتراضي (+350ms)
+                        إعادة تعيين (0ms)
                       </button>
                     </div>
 
@@ -729,13 +515,13 @@ export function TimelinePlayer({
                             ? `تقديم +${Math.round(subtitleOffset * 1000)}ms`
                             : subtitleOffset < 0
                             ? `تأخير ${Math.round(subtitleOffset * 1000)}ms`
-                            : '0ms (بدون إزاحة)'}
+                            : '0ms (تزامن لحظي دقيق)'}
                         </span>
                       </div>
                       <input
                         type="range"
                         min="-0.4"
-                        max="0.8"
+                        max="0.4"
                         step="0.05"
                         value={subtitleOffset}
                         onChange={(e) => setSubtitleOffset(parseFloat(e.target.value))}
@@ -746,10 +532,10 @@ export function TimelinePlayer({
                     {/* Quick Presets */}
                     <div className="grid grid-cols-4 gap-1 text-[10px] font-mono">
                       {[
-                        { val: 0.0, label: '0ms' },
+                        { val: 0.0, label: '0ms★' },
+                        { val: 0.1, label: '+100' },
                         { val: 0.2, label: '+200' },
-                        { val: 0.35, label: '+350★' },
-                        { val: 0.5, label: '+500' },
+                        { val: -0.1, label: '-100' },
                       ].map((preset) => (
                         <button
                           key={preset.val}

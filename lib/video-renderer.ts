@@ -1,7 +1,6 @@
 'use client';
 
 import { Scene, MotionType } from '@/types/project';
-import { splitTextIntoWordChunks, TimedWordChunk } from '@/components/timeline-player';
 import { patchVideoDuration } from '@/lib/video-duration-patcher';
 
 export type VideoQuality = '1080p' | '720p' | '480p';
@@ -26,7 +25,7 @@ export const QUALITY_PRESETS: Record<VideoQuality, QualityConfig> = {
     height: 1080,
     fps: 30,
     bitrate: 8_500_000,
-    description: 'دقة فائقة ونقاء كريستالي مع تفاصيل بارزة وترجمة ضخمة (1920x1080)',
+    description: 'دقة فائقة ونقاء كريستالي مع تفاصيل بارزة وترجمة سينمائية (1920x1080)',
   },
   '720p': {
     id: '720p',
@@ -50,6 +49,27 @@ export const QUALITY_PRESETS: Record<VideoQuality, QualityConfig> = {
   },
 };
 
+export interface TimedWord {
+  text: string;
+  startSec: number;
+  endSec: number;
+}
+
+export interface TimedWordChunk {
+  text: string;
+  startSec: number;
+  endSec: number;
+  startProgress: number; // 0 to 1
+  endProgress: number;   // 0 to 1
+  wordCount: number;
+  words: TimedWord[];
+}
+
+export interface RenderOptions {
+  channelName?: string;
+  showWatermark?: boolean;
+}
+
 export interface RenderProgress {
   currentSceneIndex: number;
   totalScenes: number;
@@ -66,6 +86,118 @@ export interface RenderResult {
   durationSec: number;
   sizeBytes: number;
   mimeType: string;
+}
+
+/**
+ * Calculates weighted word timing proportional to syllable/character counts and punctuation pauses,
+ * delivering exact 1:1 real-time synchronization with TTS speech audio.
+ */
+export function calculateWeightedWordTiming(text: string, durationSec: number): TimedWordChunk[] {
+  if (!text || !text.trim()) return [];
+
+  const rawWords = text.trim().split(/\s+/).filter(Boolean);
+  if (rawWords.length === 0) return [];
+
+  // Group into punchy 3-5 word chunks based on natural conversational pauses
+  const chunkedWordGroups: string[][] = [];
+  let currentGroup: string[] = [];
+
+  for (let i = 0; i < rawWords.length; i++) {
+    const word = rawWords[i];
+    currentGroup.push(word);
+
+    const hasPause = /[,;:.!?،؛؟—\-]$/.test(word);
+    const count = currentGroup.length;
+    const remaining = rawWords.length - 1 - i;
+
+    const shouldBreak =
+      (count >= 3 && hasPause && remaining >= 2) ||
+      (count >= 4 && remaining >= 3) ||
+      count >= 5 ||
+      i === rawWords.length - 1;
+
+    if (shouldBreak) {
+      if (remaining === 1 && count < 5) {
+        continue;
+      }
+      chunkedWordGroups.push(currentGroup);
+      currentGroup = [];
+    }
+  }
+
+  if (currentGroup.length > 0) {
+    if (chunkedWordGroups.length > 0 && currentGroup.length < 3) {
+      chunkedWordGroups[chunkedWordGroups.length - 1].push(...currentGroup);
+    } else {
+      chunkedWordGroups.push(currentGroup);
+    }
+  }
+
+  // Calculate syllable / character weight for every word
+  const speechStartSec = 0.08; // natural audio onset buffer
+  const effectiveSpeechDuration = Math.max(1.0, (durationSec - 0.2) * 0.95);
+
+  const wordWeights: number[] = [];
+  rawWords.forEach((w) => {
+    const cleanLen = Math.max(1, w.replace(/[^a-zA-Z\u0600-\u06FF0-9]/g, '').length);
+    const hasPause = /[,;:.!?،؛؟—\-]$/.test(w);
+    const weight = cleanLen + (hasPause ? 3 : 0);
+    wordWeights.push(weight);
+  });
+
+  const totalWeight = wordWeights.reduce((a, b) => a + b, 0) || 1;
+
+  let elapsedSec = speechStartSec;
+  let wordGlobalIdx = 0;
+
+  const resultChunks: TimedWordChunk[] = [];
+
+  for (let cIdx = 0; cIdx < chunkedWordGroups.length; cIdx++) {
+    const group = chunkedWordGroups[cIdx];
+    const chunkWords: TimedWord[] = [];
+    const chunkStartSec = elapsedSec;
+
+    for (let wIdx = 0; wIdx < group.length; wIdx++) {
+      const wordText = group[wIdx];
+      const weight = wordWeights[wordGlobalIdx] || 2;
+      wordGlobalIdx++;
+
+      const wordDuration = (weight / totalWeight) * effectiveSpeechDuration;
+      const wStart = elapsedSec;
+      const wEnd = elapsedSec + wordDuration;
+      elapsedSec = wEnd;
+
+      chunkWords.push({
+        text: wordText,
+        startSec: wStart,
+        endSec: wEnd,
+      });
+    }
+
+    const isLast = cIdx === chunkedWordGroups.length - 1;
+    const chunkEndSec = isLast
+      ? Math.max(elapsedSec, durationSec - 0.05)
+      : elapsedSec;
+
+    resultChunks.push({
+      text: group.join(' '),
+      startSec: chunkStartSec,
+      endSec: chunkEndSec,
+      startProgress: Math.min(1.0, chunkStartSec / durationSec),
+      endProgress: Math.min(1.0, chunkEndSec / durationSec),
+      wordCount: group.length,
+      words: chunkWords,
+    });
+  }
+
+  return resultChunks;
+}
+
+/**
+ * Backward compatibility wrapper for splitTextIntoWordChunks
+ */
+export function splitTextIntoWordChunks(text: string, durationSec: number = 4.0): TimedWordChunk[] {
+  return calculateWeightedWordTiming(text, durationSec);
 }
 
 function drawRoundRect(
@@ -92,6 +224,225 @@ function drawRoundRect(
     ctx.quadraticCurveTo(x, y, x + r, y);
     ctx.closePath();
   }
+}
+
+/**
+ * Draws top-left channel brand badge and bottom-right subtle watermark
+ */
+export function drawBrandOverlays(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  scaleRatio: number,
+  channelName: string = 'MachinaMind',
+  showWatermark: boolean = true
+) {
+  ctx.save();
+
+  // 1. TOP-LEFT Channel Badge
+  const badgeX = Math.round(40 * scaleRatio);
+  const badgeY = Math.round(36 * scaleRatio);
+  const badgeH = Math.round(48 * scaleRatio);
+
+  ctx.font = `bold ${Math.round(18 * scaleRatio)}px "Plus Jakarta Sans", system-ui, sans-serif`;
+  const nameWidth = ctx.measureText(channelName).width;
+  const badgeW = Math.max(Math.round(190 * scaleRatio), Math.round(nameWidth + 64 * scaleRatio));
+
+  ctx.fillStyle = 'rgba(9, 13, 22, 0.86)';
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
+  ctx.lineWidth = Math.max(1.5, 2 * scaleRatio);
+  drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 12 * scaleRatio);
+  ctx.fill();
+  ctx.stroke();
+
+  // Golden Diamond Icon
+  ctx.fillStyle = '#F59E0B';
+  const iconSize = Math.round(16 * scaleRatio);
+  const iconCenterX = badgeX + Math.round(22 * scaleRatio);
+  const iconCenterY = badgeY + badgeH / 2;
+  ctx.beginPath();
+  ctx.moveTo(iconCenterX, iconCenterY - iconSize / 2);
+  ctx.lineTo(iconCenterX + iconSize / 2, iconCenterY);
+  ctx.lineTo(iconCenterX, iconCenterY + iconSize / 2);
+  ctx.lineTo(iconCenterX - iconSize / 2, iconCenterY);
+  ctx.closePath();
+  ctx.fill();
+
+  // Channel Name Text
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(channelName, iconCenterX + Math.round(14 * scaleRatio), iconCenterY);
+
+  // 2. BOTTOM-RIGHT Subtle Watermark (Semi-transparent, non-intrusive)
+  if (showWatermark) {
+    const wmPaddingX = Math.round(36 * scaleRatio);
+    const wmPaddingY = Math.round(32 * scaleRatio);
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    ctx.font = `600 ${Math.round(16 * scaleRatio)}px "Plus Jakarta Sans", system-ui, sans-serif`;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+    ctx.shadowBlur = Math.round(6 * scaleRatio);
+    ctx.fillText(`⬡ ${channelName.toUpperCase()}`, width - wmPaddingX, height - wmPaddingY);
+  }
+
+  ctx.restore();
+}
+
+/**
+ * Draws modern cinematic floating subtitles with smooth word-by-word golden highlight,
+ * atmospheric scrim gradient, and 100% legibility on any background image.
+ */
+export function drawCinematicSubtitles(
+  ctx: CanvasRenderingContext2D,
+  chunk: TimedWordChunk,
+  sceneElapsedSec: number,
+  width: number,
+  height: number,
+  scaleRatio: number
+) {
+  if (!chunk || !chunk.text) return;
+
+  ctx.save();
+
+  // 1. Bottom Atmospheric Gradient Scrim (No rigid boxed pill, silky cinematic darkening)
+  const scrimH = Math.round(340 * scaleRatio);
+  const textScrim = ctx.createLinearGradient(0, height - scrimH, 0, height);
+  textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  textScrim.addColorStop(0.35, 'rgba(5, 8, 16, 0.45)');
+  textScrim.addColorStop(0.7, 'rgba(5, 8, 16, 0.78)');
+  textScrim.addColorStop(1, 'rgba(5, 8, 16, 0.94)');
+  ctx.fillStyle = textScrim;
+  ctx.fillRect(0, height - scrimH, width, scrimH);
+
+  // 2. Typography Setup
+  const fontSize = Math.round(58 * scaleRatio);
+  ctx.font = `900 ${fontSize}px "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+  ctx.textBaseline = 'middle';
+
+  const words = chunk.words && chunk.words.length > 0
+    ? chunk.words
+    : chunk.text.trim().split(/\s+/).map((w, i, arr) => ({
+        text: w,
+        startSec: chunk.startSec + (i / arr.length) * (chunk.endSec - chunk.startSec),
+        endSec: chunk.startSec + ((i + 1) / arr.length) * (chunk.endSec - chunk.startSec),
+      }));
+
+  const textY = height - Math.round(130 * scaleRatio);
+  const spaceWidth = ctx.measureText(' ').width;
+
+  const wordMeasurements = words.map((w) => ({
+    text: w.text,
+    width: ctx.measureText(w.text).width,
+    startSec: w.startSec,
+    endSec: w.endSec,
+  }));
+
+  const totalPhraseWidth = wordMeasurements.reduce((acc, m) => acc + m.width, 0) + (wordMeasurements.length - 1) * spaceWidth;
+  
+  // Scale down gracefully if phrase exceeds 86% of viewport width
+  let phraseScale = 1.0;
+  const maxAllowedWidth = width * 0.86;
+  if (totalPhraseWidth > maxAllowedWidth) {
+    phraseScale = maxAllowedWidth / totalPhraseWidth;
+  }
+
+  ctx.save();
+  ctx.translate(width / 2, textY);
+  ctx.scale(phraseScale, phraseScale);
+  ctx.translate(-width / 2, -textY);
+
+  const isArabic = /[\u0600-\u06FF]/.test(chunk.text);
+
+  if (isArabic) {
+    // In Arabic (RTL): first word spoken appears on the RIGHT, flowing leftwards
+    let curX = (width + totalPhraseWidth) / 2;
+
+    for (let i = 0; i < wordMeasurements.length; i++) {
+      const wm = wordMeasurements[i];
+      curX -= wm.width;
+
+      const isActive = sceneElapsedSec >= wm.startSec && sceneElapsedSec < wm.endSec;
+      const isPast = sceneElapsedSec >= wm.endSec;
+      const isHeld = sceneElapsedSec >= wm.startSec;
+
+      ctx.save();
+      ctx.textAlign = 'left';
+
+      // Deep solid black outline for contrast
+      ctx.lineJoin = 'round';
+      ctx.miterLimit = 2;
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = Math.max(6, Math.round(10 * scaleRatio));
+      ctx.strokeText(wm.text, curX, textY);
+
+      if (isActive) {
+        // Glowing active word
+        ctx.fillStyle = '#F59E0B';
+        ctx.shadowColor = 'rgba(245, 158, 11, 0.95)';
+        ctx.shadowBlur = Math.round(18 * scaleRatio);
+        ctx.fillText(wm.text, curX, textY);
+      } else if (isPast || isHeld) {
+        // Spoken words in phrase
+        ctx.fillStyle = '#FFFFFF';
+        ctx.shadowColor = 'rgba(245, 158, 11, 0.3)';
+        ctx.shadowBlur = Math.round(8 * scaleRatio);
+        ctx.fillText(wm.text, curX, textY);
+      } else {
+        // Upcoming words in phrase
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+        ctx.shadowBlur = 0;
+        ctx.fillText(wm.text, curX, textY);
+      }
+
+      ctx.restore();
+      curX -= spaceWidth;
+    }
+  } else {
+    // Latin / English (LTR): first word on left, flowing rightwards
+    let curX = (width - totalPhraseWidth) / 2;
+
+    for (let i = 0; i < wordMeasurements.length; i++) {
+      const wm = wordMeasurements[i];
+
+      const isActive = sceneElapsedSec >= wm.startSec && sceneElapsedSec < wm.endSec;
+      const isPast = sceneElapsedSec >= wm.endSec;
+      const isHeld = sceneElapsedSec >= wm.startSec;
+
+      ctx.save();
+      ctx.textAlign = 'left';
+
+      ctx.lineJoin = 'round';
+      ctx.miterLimit = 2;
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = Math.max(6, Math.round(10 * scaleRatio));
+      ctx.strokeText(wm.text, curX, textY);
+
+      if (isActive) {
+        ctx.fillStyle = '#F59E0B';
+        ctx.shadowColor = 'rgba(245, 158, 11, 0.95)';
+        ctx.shadowBlur = Math.round(18 * scaleRatio);
+        ctx.fillText(wm.text, curX, textY);
+      } else if (isPast || isHeld) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.shadowColor = 'rgba(245, 158, 11, 0.3)';
+        ctx.shadowBlur = Math.round(8 * scaleRatio);
+        ctx.fillText(wm.text, curX, textY);
+      } else {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+        ctx.shadowBlur = 0;
+        ctx.fillText(wm.text, curX, textY);
+      }
+
+      ctx.restore();
+      curX += wm.width + spaceWidth;
+    }
+  }
+
+  ctx.restore(); // restore scale
+  ctx.restore(); // restore scrim & state
 }
 
 /**
@@ -172,7 +523,8 @@ export async function renderProjectVideo(
   scenes: Scene[],
   quality: VideoQuality,
   onProgress: (progress: RenderProgress) => void,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  options?: RenderOptions
 ): Promise<RenderResult> {
   if (!scenes || scenes.length === 0) {
     throw new Error('لا توجد مشاهد متاحة للتصدير');
@@ -236,7 +588,7 @@ export async function renderProjectVideo(
     const durationSec = Math.max(2.0, audioBuffer.duration || defaultDuration);
     totalDurationSec += durationSec;
 
-    const wordChunks = splitTextIntoWordChunks(scene.narration_text || '');
+    const wordChunks = calculateWeightedWordTiming(scene.narration_text || '', durationSec);
 
     sceneAssets.push({
       scene,
@@ -418,121 +770,24 @@ export async function renderProjectVideo(
       ctx.fillStyle = vignette;
       ctx.fillRect(0, 0, width, height);
 
-      // ─── MachinaMind Channel Badge (Top Left) ───
-      ctx.save();
-      const badgeX = Math.round(40 * scaleRatio);
-      const badgeY = Math.round(36 * scaleRatio);
-      const badgeW = Math.round(230 * scaleRatio);
-      const badgeH = Math.round(52 * scaleRatio);
+      // ─── Dual Branding: Top-Left Badge & Bottom-Right Subtle Watermark ───
+      drawBrandOverlays(
+        ctx,
+        width,
+        height,
+        scaleRatio,
+        options?.channelName || 'MachinaMind',
+        options?.showWatermark !== false
+      );
 
-      ctx.fillStyle = 'rgba(11, 15, 23, 0.88)';
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
-      ctx.lineWidth = Math.max(1.5, 2 * scaleRatio);
-      drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 12 * scaleRatio);
-      ctx.fill();
-      ctx.stroke();
-
-      // Brand Icon (Golden Diamond)
-      ctx.fillStyle = '#F59E0B';
-      const iconSize = Math.round(18 * scaleRatio);
-      const iconCenterX = badgeX + Math.round(24 * scaleRatio);
-      const iconCenterY = badgeY + badgeH / 2;
-      ctx.beginPath();
-      ctx.moveTo(iconCenterX, iconCenterY - iconSize / 2);
-      ctx.lineTo(iconCenterX + iconSize / 2, iconCenterY);
-      ctx.lineTo(iconCenterX, iconCenterY + iconSize / 2);
-      ctx.lineTo(iconCenterX - iconSize / 2, iconCenterY);
-      ctx.closePath();
-      ctx.fill();
-
-      // Brand Text
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = `bold ${Math.round(20 * scaleRatio)}px "Plus Jakarta Sans", sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('MachinaMind', iconCenterX + Math.round(16 * scaleRatio), iconCenterY);
-      ctx.restore();
-
-      // ─── Active Reels-Style Huge Subtitle Chunk (Bottom Center) ───
-      // Apply offset calibration (-350ms lead time)
-      const adjustedTimeSec = Math.max(0, sceneElapsedSec + 0.35);
-      const adjustedProgress = Math.min(1.0, adjustedTimeSec / durationSec);
-
+      // ─── Active Reels-Style Cinematic Floating Subtitles (Exact 1:1 Audio Sync) ───
       const activeChunk =
-        wordChunks.find((c) => adjustedProgress >= c.startProgress && adjustedProgress <= c.endProgress) ||
-        wordChunks[wordChunks.length - 1] ||
-        (wordChunks[0] ? wordChunks[0] : null);
+        wordChunks.find((c) => sceneElapsedSec >= c.startSec && sceneElapsedSec <= c.endSec) ||
+        wordChunks.find((c) => sceneElapsedSec < c.endSec) ||
+        wordChunks[wordChunks.length - 1];
 
       if (activeChunk && activeChunk.text) {
-        // Deep Gradient Scrim at bottom for crystal-clear readability
-        const scrimH = Math.round(360 * scaleRatio);
-        const textScrim = ctx.createLinearGradient(0, height - scrimH, 0, height);
-        textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
-        textScrim.addColorStop(0.3, 'rgba(0, 0, 0, 0.75)');
-        textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.98)');
-        ctx.fillStyle = textScrim;
-        ctx.fillRect(0, height - scrimH, width, scrimH);
-
-        // Huge Reels-Style Subtitles (72px on 1080p, Black 900 weight, 12px solid black outline)
-        const fontSize = Math.round(72 * scaleRatio);
-        ctx.font = `900 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Plus Jakarta Sans", "Segoe UI", Roboto, sans-serif`;
-
-        const textToDraw = activeChunk.text.trim();
-        const measured = ctx.measureText(textToDraw);
-        const textW = measured.width;
-
-        const padX = Math.round(54 * scaleRatio);
-        const subCardW = Math.min(width * 0.92, Math.max(width * 0.68, textW + padX * 2));
-        const subCardH = Math.round(124 * scaleRatio);
-        const subCardX = (width - subCardW) / 2;
-        const subCardY = height - Math.round(170 * scaleRatio);
-
-        ctx.save();
-        // High-contrast dark backdrop bar
-        ctx.fillStyle = 'rgba(7, 10, 18, 0.93)';
-        ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)';
-        ctx.lineWidth = Math.max(3, 4 * scaleRatio);
-        drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, 20 * scaleRatio);
-        ctx.fill();
-        ctx.stroke();
-
-        const textCenterX = subCardX + subCardW / 2;
-        const textCenterY = subCardY + subCardH / 2 - Math.round(4 * scaleRatio);
-
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-
-        // 1. Thick solid black outline for 100% contrast on mobile screens
-        ctx.lineJoin = 'round';
-        ctx.miterLimit = 2;
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = Math.max(8, Math.round(12 * scaleRatio));
-        ctx.strokeText(textToDraw, textCenterX, textCenterY);
-
-        // 2. Crisp bright white text fill with subtle gold shadow
-        ctx.fillStyle = '#FFFFFF';
-        ctx.shadowColor = 'rgba(245, 158, 11, 0.75)';
-        ctx.shadowBlur = Math.round(20 * scaleRatio);
-        ctx.fillText(textToDraw, textCenterX, textCenterY);
-
-        // 3. Golden dynamic progress underline inside the capsule
-        const progBarW = subCardW - Math.round(60 * scaleRatio);
-        const progBarH = Math.max(3, Math.round(5 * scaleRatio));
-        const progBarX = subCardX + Math.round(30 * scaleRatio);
-        const progBarY = subCardY + subCardH - Math.round(12 * scaleRatio);
-
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
-        ctx.fillRect(progBarX, progBarY, progBarW, progBarH);
-
-        const chunkSpan = Math.max(0.001, activeChunk.endProgress - activeChunk.startProgress);
-        const innerProgress = Math.min(1.0, Math.max(0, (adjustedProgress - activeChunk.startProgress) / chunkSpan));
-        if (innerProgress > 0) {
-          ctx.fillStyle = '#F59E0B';
-          ctx.fillRect(progBarX, progBarY, progBarW * innerProgress, progBarH);
-        }
-
-        ctx.restore();
+        drawCinematicSubtitles(ctx, activeChunk, sceneElapsedSec, width, height, scaleRatio);
       }
 
       // Sync with real-time video stream pacing
