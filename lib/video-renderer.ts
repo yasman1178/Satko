@@ -2,6 +2,7 @@
 
 import { Scene, MotionType } from '@/types/project';
 import { splitTextIntoWordChunks, TimedWordChunk } from '@/components/timeline-player';
+import { fixWebmDuration } from '@/lib/webm-duration-fixer';
 
 export type VideoQuality = '1080p' | '720p' | '480p';
 
@@ -459,37 +460,55 @@ export async function renderProjectVideo(
         (wordChunks[0] ? wordChunks[0] : null);
 
       if (activeChunk && activeChunk.text) {
-        // Gradient Scrim at bottom
-        const scrimH = Math.round(160 * scaleRatio);
+        // Deep Gradient Scrim at bottom for crystal-clear readability
+        const scrimH = Math.round(260 * scaleRatio);
         const textScrim = ctx.createLinearGradient(0, height - scrimH, 0, height);
         textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
-        textScrim.addColorStop(0.5, 'rgba(0, 0, 0, 0.65)');
-        textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.9)');
+        textScrim.addColorStop(0.35, 'rgba(0, 0, 0, 0.7)');
+        textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.96)');
         ctx.fillStyle = textScrim;
         ctx.fillRect(0, height - scrimH, width, scrimH);
 
-        // Compact Subtitle Capsule
-        const subCardW = Math.round(Math.min(500 * scaleRatio, width * 0.38));
-        const subCardH = Math.round(48 * scaleRatio);
+        // 2X Doubled Subtitle Capsule (Doubled from 48px to 92px height, 42px font)
+        const subCardW = Math.round(Math.min(960 * scaleRatio, width * 0.76));
+        const subCardH = Math.round(92 * scaleRatio);
         const subCardX = (width - subCardW) / 2;
-        const subCardY = height - Math.round(110 * scaleRatio);
+        const subCardY = height - Math.round(150 * scaleRatio);
 
         ctx.save();
-        ctx.fillStyle = 'rgba(9, 13, 22, 0.9)';
-        ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
-        ctx.lineWidth = Math.max(1, 1.5 * scaleRatio);
+        ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
+        ctx.lineWidth = Math.max(2, 2.5 * scaleRatio);
         drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, subCardH / 2);
         ctx.fill();
         ctx.stroke();
 
-        // Active chunk text
+        // Active chunk text (Doubled font: 42px on 1080p, proportional on 720p/480p)
         ctx.fillStyle = '#FFFFFF';
-        ctx.font = `bold ${Math.round(21 * scaleRatio)}px "Plus Jakarta Sans", sans-serif`;
+        ctx.font = `bold ${Math.round(42 * scaleRatio)}px "Plus Jakarta Sans", sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor = 'rgba(245, 158, 11, 0.45)';
-        ctx.shadowBlur = 8 * scaleRatio;
+        ctx.shadowColor = 'rgba(245, 158, 11, 0.6)';
+        ctx.shadowBlur = 16 * scaleRatio;
         ctx.fillText(activeChunk.text.trim(), subCardX + subCardW / 2, subCardY + subCardH / 2);
+
+        // Subtle amber progress underline inside the capsule
+        const progBarW = subCardW - Math.round(60 * scaleRatio);
+        const progBarH = Math.max(2, Math.round(3.5 * scaleRatio));
+        const progBarX = subCardX + Math.round(30 * scaleRatio);
+        const progBarY = subCardY + subCardH - Math.round(8 * scaleRatio);
+
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.fillRect(progBarX, progBarY, progBarW, progBarH);
+
+        const chunkSpan = Math.max(0.001, activeChunk.endProgress - activeChunk.startProgress);
+        const innerProgress = Math.min(1.0, Math.max(0, (adjustedProgress - activeChunk.startProgress) / chunkSpan));
+        if (innerProgress > 0) {
+          ctx.fillStyle = '#F59E0B';
+          ctx.fillRect(progBarX, progBarY, progBarW * innerProgress, progBarH);
+        }
+
         ctx.restore();
       }
 
@@ -520,14 +539,14 @@ export async function renderProjectVideo(
     accumulatedTime += durationSec;
   }
 
-  // 6. Finalize Recording
+  // 6. Finalize Recording and Inject Accurate Duration Metadata
   onProgress({
     currentSceneIndex: scenes.length,
     totalScenes: scenes.length,
     percent: 99,
     currentTimeSec: Math.round(totalDurationSec),
     totalTimeSec: Math.round(totalDurationSec),
-    statusText: 'جارِ إتمام وتجميع ملف الفيديو النهائي...',
+    statusText: 'جارِ إتمام وتجميع ملف الفيديو وحقن بيانات التوقيت للهواتف المحمولة...',
   });
 
   // Brief flush delay before stopping recorder
@@ -535,7 +554,18 @@ export async function renderProjectVideo(
   recorder.stop();
 
   const finalBlob = await recorderStoppedPromise;
-  const downloadUrl = URL.createObjectURL(finalBlob);
+
+  // Patch WebM Duration metadata so mobile players (Android / iOS / WhatsApp) show accurate duration
+  let patchedBlob = finalBlob;
+  if (extension === 'webm' || finalBlob.type.includes('webm')) {
+    try {
+      patchedBlob = await fixWebmDuration(finalBlob, Math.round(totalDurationSec * 1000));
+    } catch (err) {
+      console.warn('Error patching WebM duration:', err);
+    }
+  }
+
+  const downloadUrl = URL.createObjectURL(patchedBlob);
   const cleanTitle = (scenes[0]?.narration_text ? 'MachinaMind_Chapter_001' : 'MachinaMind_Video');
   const filename = `${cleanTitle}_${quality}_${Date.now()}.${extension}`;
 
@@ -549,7 +579,7 @@ export async function renderProjectVideo(
     percent: 100,
     currentTimeSec: Math.round(totalDurationSec),
     totalTimeSec: Math.round(totalDurationSec),
-    statusText: 'اكتمل الرندر بنجاح! جاري التنزيل المباشر...',
+    statusText: 'اكتمل الرندر وتثبيت توقيت الموبايل بنجاح! جاري التنزيل المباشر...',
   });
 
   // Automatically trigger download
@@ -565,11 +595,11 @@ export async function renderProjectVideo(
   }
 
   return {
-    blob: finalBlob,
+    blob: patchedBlob,
     url: downloadUrl,
     filename,
     durationSec: totalDurationSec,
-    sizeBytes: finalBlob.size,
+    sizeBytes: patchedBlob.size,
     mimeType,
   };
 }

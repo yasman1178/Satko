@@ -369,6 +369,12 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
                   {QUALITY_PRESETS[selectedQuality].width}x{QUALITY_PRESETS[selectedQuality].height} ({selectedQuality})
                 </span>
               </div>
+              <div className="flex items-center justify-between p-2 bg-slate-950 rounded border border-slate-800 text-[11px] text-slate-400">
+                <span>الميزات المطبقة:</span>
+                <span className="font-medium text-emerald-400">
+                  ترجمة مضاعفة 2X · تثبيت مدة الموبايل
+                </span>
+              </div>
             </div>
 
             {/* Render Progress or Buttons */}
