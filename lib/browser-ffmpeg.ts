@@ -99,6 +99,10 @@ export async function transcodeToMp4InBrowser(
   const inputFilename = 'input_recorded.webm';
   const outputFilename = 'output_final.mp4';
 
+  // Ensure virtual filesystem is clean before starting
+  try { await ffmpeg.deleteFile(inputFilename); } catch {}
+  try { await ffmpeg.deleteFile(outputFilename); } catch {}
+
   await ffmpeg.writeFile(inputFilename, inputData);
 
   const progressHandler = ({ progress }: { progress: number }) => {
@@ -116,8 +120,9 @@ export async function transcodeToMp4InBrowser(
     message: 'تطبيق حاوية MP4 القياسية وترميز AAC وضبط faststart...',
   });
 
-  // Attempt stream copy first (ultra fast remuxing)
+  // 1. Fast stream copy: copies video track directly without slow re-encoding, transcodes Opus audio to AAC
   let exitCode = await ffmpeg.exec([
+    '-y',
     '-i',
     inputFilename,
     '-c:v',
@@ -131,18 +136,22 @@ export async function transcodeToMp4InBrowser(
     outputFilename,
   ]);
 
-  // If stream copy fails (e.g. video codec in webm is VP8/VP9 requiring H.264 transcode), transcode to H.264
+  // 2. If copy failed (e.g. video codec needs remuxing), try ultrafast x264 transcode
   if (exitCode !== 0) {
     if (abortSignal?.aborted) {
+      ffmpeg.off('progress', progressHandler);
       throw new Error('تم إلغاء عملية الرندر');
     }
 
     onProgress?.({
-      ratio: 0.35,
-      message: 'ترميز الفيديو السريع H.264 / AAC عبر FFmpeg في المتصفح...',
+      ratio: 0.5,
+      message: 'تحويل الحاوية إلى MP4 مع ترميز H.264 فائق السرعة...',
     });
 
+    try { await ffmpeg.deleteFile(outputFilename); } catch {}
+
     exitCode = await ffmpeg.exec([
+      '-y',
       '-i',
       inputFilename,
       '-c:v',
@@ -150,9 +159,7 @@ export async function transcodeToMp4InBrowser(
       '-preset',
       'ultrafast',
       '-crf',
-      '22',
-      '-pix_fmt',
-      'yuv420p',
+      '26',
       '-c:a',
       'aac',
       '-b:a',
@@ -166,7 +173,7 @@ export async function transcodeToMp4InBrowser(
   ffmpeg.off('progress', progressHandler);
 
   if (exitCode !== 0) {
-    throw new Error(`تعذر على محرك FFmpeg إتمام المعالجة (رمز الخروج ${exitCode})`);
+    throw new Error(`تعذر التحويل المباشر للحاوية (رمز ${exitCode})`);
   }
 
   onProgress?.({

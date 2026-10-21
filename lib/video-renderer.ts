@@ -316,6 +316,8 @@ export async function renderProjectVideo(
 
   // 5. Sequential Scene Rendering Loop
   let accumulatedTime = 0;
+  const leadTimeSec = 0.15;
+  const masterStartAudioTime = audioCtx.currentTime + leadTimeSec;
 
   for (let sceneIdx = 0; sceneIdx < sceneAssets.length; sceneIdx++) {
     if (abortSignal?.aborted) {
@@ -326,26 +328,39 @@ export async function renderProjectVideo(
 
     const { scene, audioBuffer, imageElement, durationSec, subtitleChunks } = sceneAssets[sceneIdx];
 
-    // Play scene audio into destination
+    // 1. Isolated GainNode and Audio Source for this specific scene (Strict Zero Bleed)
+    const sceneGain = audioCtx.createGain();
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(audioDest);
-    source.start();
+    source.connect(sceneGain);
+    sceneGain.connect(audioDest);
+
+    const sceneAudioStart = masterStartAudioTime + accumulatedTime;
+    const sceneAudioEnd = sceneAudioStart + durationSec;
+
+    // 2. Strict 30ms micro-fade out before the hard end to prevent clicks and eliminate any bleeding
+    sceneGain.gain.setValueAtTime(1.0, Math.max(sceneAudioStart, sceneAudioEnd - 0.03));
+    sceneGain.gain.linearRampToValueAtTime(0.0001, sceneAudioEnd);
+
+    // Schedule exact start and hard clamp to durationSec
+    source.start(sceneAudioStart, 0, durationSec);
+    source.stop(sceneAudioEnd);
 
     const sceneStartTime = performance.now();
     const frameIntervalMs = 1000 / fps;
-    const totalFrames = Math.ceil(durationSec * fps);
+    const totalFrames = Math.max(1, Math.round(durationSec * fps));
 
     for (let frame = 0; frame < totalFrames; frame++) {
       if (abortSignal?.aborted) {
         try { source.stop(); } catch {}
+        try { source.disconnect(); sceneGain.disconnect(); } catch {}
         try { recorder.stop(); } catch {}
         try { audioCtx.close(); } catch {}
         throw new Error('تم إلغاء عملية الرندر');
       }
 
       const frameTargetTime = sceneStartTime + frame * frameIntervalMs;
-      const progress = Math.min(1.0, frame / totalFrames);
+      const progress = Math.min(1.0, frame / Math.max(1, totalFrames - 1));
       const sceneElapsedSec = progress * durationSec;
       const currentGlobalSec = accumulatedTime + sceneElapsedSec;
 
@@ -562,11 +577,11 @@ export async function renderProjectVideo(
         await new Promise((r) => setTimeout(r, delayNeeded));
       }
 
-      // Update progress every 5 frames
-      if (frame % 5 === 0 || frame === totalFrames - 1) {
+      // Update progress every 4 frames
+      if (frame % 4 === 0 || frame === totalFrames - 1) {
         const overallPercent = Math.min(
-          99,
-          Math.round(20 + ((accumulatedTime + sceneElapsedSec) / (totalDurationSec || 1)) * 78)
+          93,
+          Math.round(20 + ((accumulatedTime + sceneElapsedSec) / (totalDurationSec || 1)) * 72)
         );
         onProgress({
           currentSceneIndex: sceneIdx + 1,
@@ -579,6 +594,21 @@ export async function renderProjectVideo(
       }
     }
 
+    // 3. Ensure AudioContext clock has reached the end of this scene
+    const audioRemainingMs = (sceneAudioEnd - audioCtx.currentTime) * 1000;
+    if (audioRemainingMs > 5) {
+      await new Promise((r) => setTimeout(r, Math.min(1000, audioRemainingMs)));
+    }
+
+    // 4. Strictly stop and disconnect this scene's audio nodes to prevent any overlap
+    try {
+      source.stop();
+    } catch {}
+    try {
+      source.disconnect();
+      sceneGain.disconnect();
+    } catch {}
+
     accumulatedTime += durationSec;
   }
 
@@ -586,14 +616,14 @@ export async function renderProjectVideo(
   onProgress({
     currentSceneIndex: scenes.length,
     totalScenes: scenes.length,
-    percent: 99,
+    percent: 94,
     currentTimeSec: Math.round(totalDurationSec),
     totalTimeSec: Math.round(totalDurationSec),
     statusText: 'جارِ إتمام وتجميع ملف الفيديو وحقن بيانات التوقيت لهواتف أندرويد وواتساب...',
   });
 
   // Brief flush delay before stopping recorder and request data
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 200));
   try {
     if (recorder.state === 'recording') {
       recorder.requestData();
@@ -608,13 +638,13 @@ export async function renderProjectVideo(
     } catch {}
   }
 
-  // Safety race timeout: wait up to 2500ms for recorderStoppedPromise, otherwise construct blob from collected chunks
+  // Safety race timeout: wait up to 3000ms for recorderStoppedPromise, otherwise construct blob from collected chunks
   const finalBlob = await Promise.race([
     recorderStoppedPromise,
     new Promise<Blob>((resolve) =>
       setTimeout(() => {
         resolve(new Blob(chunks, { type: mimeType }));
-      }, 2500)
+      }, 3000)
     ),
   ]);
 
@@ -623,54 +653,72 @@ export async function renderProjectVideo(
     combinedStream.getTracks().forEach((track) => track.stop());
   } catch {}
 
-  // In-Browser FFmpeg MP4 Engine: Remux and transcode to standard MP4 with +faststart
+  // 7. Fast Container Packaging & Duration Patching
   onProgress({
     currentSceneIndex: scenes.length,
     totalScenes: scenes.length,
-    percent: 92,
+    percent: 96,
     currentTimeSec: Math.round(totalDurationSec),
     totalTimeSec: Math.round(totalDurationSec),
-    statusText: 'تشغيل محرك FFmpeg MP4 المحلي في المتصفح لتجهيز صيغة MP4 القياسية...',
+    statusText: 'جارِ تحضير حاوية الفيديو وضبط فهارس التوقيت الدقيقة...',
   });
 
-  let finalMp4Blob: Blob = finalBlob;
-  let finalExtension = 'mp4';
-  let finalMimeType = 'video/mp4';
+  let finalExportBlob: Blob = finalBlob;
+  let finalExtension = extension;
+  let finalMimeType = mimeType;
 
-  try {
-    finalMp4Blob = await transcodeToMp4InBrowser(
-      finalBlob,
-      (p) => {
-        const percent = Math.min(99, Math.round(92 + p.ratio * 7));
-        onProgress({
-          currentSceneIndex: scenes.length,
-          totalScenes: scenes.length,
-          percent,
-          currentTimeSec: Math.round(totalDurationSec),
-          totalTimeSec: Math.round(totalDurationSec),
-          statusText: `[FFmpeg MP4] ${p.message}`,
-        });
-      },
-      abortSignal
-    );
-    finalExtension = 'mp4';
-    finalMimeType = 'video/mp4';
-  } catch (ffmpegErr) {
-    console.warn('In-browser FFmpeg conversion fallback:', ffmpegErr);
+  // 1. If native MP4 was recorded by the browser, patch it directly in 20ms
+  if (extension === 'mp4' || finalBlob.type.includes('mp4')) {
     try {
-      const formatType = (extension === 'mp4' || finalBlob.type.includes('mp4')) ? 'mp4' : 'webm';
-      finalMp4Blob = await patchVideoDuration(finalBlob, totalDurationSec, formatType);
-      finalExtension = formatType;
-      finalMimeType = formatType === 'mp4' ? 'video/mp4' : 'video/webm';
-    } catch {
-      finalMp4Blob = finalBlob;
-      finalExtension = extension;
-      finalMimeType = mimeType;
+      finalExportBlob = await patchVideoDuration(finalBlob, totalDurationSec, 'mp4');
+      finalExtension = 'mp4';
+      finalMimeType = 'video/mp4';
+    } catch (e) {
+      console.warn('Native MP4 patch fallback:', e);
+      finalExportBlob = finalBlob;
+    }
+  } else {
+    // 2. If recorded as WebM, attempt fast in-browser FFmpeg stream copy to standard MP4
+    let remuxSucceeded = false;
+    try {
+      const remuxPromise = transcodeToMp4InBrowser(
+        finalBlob,
+        (p) => {
+          onProgress({
+            currentSceneIndex: scenes.length,
+            totalScenes: scenes.length,
+            percent: Math.min(99, Math.round(94 + p.ratio * 5)),
+            currentTimeSec: Math.round(totalDurationSec),
+            totalTimeSec: Math.round(totalDurationSec),
+            statusText: `[محرك FFmpeg MP4] ${p.message}`,
+          });
+        },
+        abortSignal
+      );
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Remux timeout, using direct hardware stream')), 8000)
+      );
+
+      const remuxedMp4 = await Promise.race([remuxPromise, timeoutPromise]);
+      finalExportBlob = await patchVideoDuration(remuxedMp4, totalDurationSec, 'mp4');
+      finalExtension = 'mp4';
+      finalMimeType = 'video/mp4';
+      remuxSucceeded = true;
+    } catch (remuxErr) {
+      console.warn('Fast remux to MP4 bypassed, using direct hardware stream with WebM duration patcher:', remuxErr);
+    }
+
+    if (!remuxSucceeded) {
+      // Patch WebM with accurate 64-bit float duration so seeking and playback work 100% on all players
+      finalExportBlob = await patchVideoDuration(finalBlob, totalDurationSec, 'webm');
+      finalExtension = 'webm';
+      finalMimeType = 'video/webm';
     }
   }
 
-  const downloadUrl = URL.createObjectURL(finalMp4Blob);
-  const cleanTitle = (scenes[0]?.narration_text ? 'Mindplicit_Video' : 'Mindplicit_Video');
+  const downloadUrl = URL.createObjectURL(finalExportBlob);
+  const cleanTitle = 'Mindplicit_Video';
   const filename = `${cleanTitle}_${quality}_${Date.now()}.${finalExtension}`;
 
   try {
@@ -683,7 +731,7 @@ export async function renderProjectVideo(
     percent: 100,
     currentTimeSec: Math.round(totalDurationSec),
     totalTimeSec: Math.round(totalDurationSec),
-    statusText: 'اكتمل إنتاج الفيديو بنجاح عبر محرك FFmpeg MP4 المحلي! جاري التحميل...',
+    statusText: `اكتمل إنتاج الفيديو بنجاح بصيغة ${finalExtension.toUpperCase()}! جاري التحميل...`,
   });
 
   // Automatically trigger download
@@ -705,11 +753,11 @@ export async function renderProjectVideo(
   }
 
   return {
-    blob: finalMp4Blob,
+    blob: finalExportBlob,
     url: downloadUrl,
     filename,
     durationSec: totalDurationSec,
-    sizeBytes: finalMp4Blob.size,
+    sizeBytes: finalExportBlob.size,
     mimeType: finalMimeType,
   };
 }

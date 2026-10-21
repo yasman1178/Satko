@@ -232,7 +232,7 @@ export async function patchWebmDuration(blob: Blob, durationMs: number): Promise
 // ─── MP4 Box Helpers ───
 
 /**
- * Patches MP4 Blob with exact duration in seconds
+ * Patches MP4 Blob with exact duration in seconds across mvhd, tkhd, and mdhd boxes.
  */
 export async function patchMp4Duration(blob: Blob, durationSec: number): Promise<Blob> {
   try {
@@ -240,58 +240,73 @@ export async function patchMp4Duration(blob: Blob, durationSec: number): Promise
     const buffer = new Uint8Array(arrayBuffer);
     const view = new DataView(arrayBuffer);
 
-    let offset = 0;
-    while (offset < buffer.length - 8) {
-      const boxSize = view.getUint32(offset);
-      const boxType = String.fromCharCode(
-        buffer[offset + 4],
-        buffer[offset + 5],
-        buffer[offset + 6],
-        buffer[offset + 7]
-      );
+    let movieTimescale = 1000;
 
-      if (boxSize < 8 || offset + boxSize > buffer.length) break;
-
-      if (boxType === 'moov') {
-        // Search inside moov for mvhd
-        let moovOffset = offset + 8;
-        const moovEnd = offset + boxSize;
-
-        while (moovOffset < moovEnd - 8) {
-          const subSize = view.getUint32(moovOffset);
-          const subType = String.fromCharCode(
-            buffer[moovOffset + 4],
-            buffer[moovOffset + 5],
-            buffer[moovOffset + 6],
-            buffer[moovOffset + 7]
-          );
-
-          if (subSize < 8 || moovOffset + subSize > moovEnd) break;
-
-          if (subType === 'mvhd') {
-            const version = buffer[moovOffset + 8];
-            if (version === 0) {
-              const timescale = view.getUint32(moovOffset + 20);
-              if (timescale > 0) {
-                const totalUnits = Math.round(durationSec * timescale);
-                view.setUint32(moovOffset + 24, totalUnits);
-              }
-            } else if (version === 1) {
-              const timescale = view.getUint32(moovOffset + 28);
-              if (timescale > 0) {
-                const totalUnits = BigInt(Math.round(durationSec * timescale));
-                view.setBigUint64(moovOffset + 32, totalUnits);
-              }
-            }
-          }
-
-          moovOffset += subSize;
+    function scanBoxes(start: number, end: number) {
+      let offset = start;
+      while (offset < end - 8) {
+        let boxSize = view.getUint32(offset);
+        if (boxSize === 0) {
+          boxSize = end - offset;
+        } else if (boxSize === 1) {
+          if (offset + 16 > end) break;
+          const high = view.getUint32(offset + 8);
+          const low = view.getUint32(offset + 12);
+          boxSize = high * 4294967296 + low;
         }
-      }
 
-      offset += boxSize;
+        if (boxSize < 8 || offset + boxSize > end) break;
+
+        const boxType = String.fromCharCode(
+          buffer[offset + 4],
+          buffer[offset + 5],
+          buffer[offset + 6],
+          buffer[offset + 7]
+        );
+
+        const contentStart = offset + 8;
+        const contentEnd = offset + boxSize;
+
+        if (boxType === 'moov' || boxType === 'trak' || boxType === 'mdia' || boxType === 'minf') {
+          scanBoxes(contentStart, contentEnd);
+        } else if (boxType === 'mvhd') {
+          const version = buffer[contentStart];
+          if (version === 0) {
+            movieTimescale = view.getUint32(contentStart + 12) || 1000;
+            const totalUnits = Math.round(durationSec * movieTimescale);
+            view.setUint32(contentStart + 16, totalUnits);
+          } else if (version === 1) {
+            movieTimescale = view.getUint32(contentStart + 20) || 1000;
+            const totalUnits = BigInt(Math.round(durationSec * movieTimescale));
+            view.setBigUint64(contentStart + 24, totalUnits);
+          }
+        } else if (boxType === 'tkhd') {
+          const version = buffer[contentStart];
+          if (version === 0) {
+            const totalUnits = Math.round(durationSec * movieTimescale);
+            view.setUint32(contentStart + 20, totalUnits);
+          } else if (version === 1) {
+            const totalUnits = BigInt(Math.round(durationSec * movieTimescale));
+            view.setBigUint64(contentStart + 28, totalUnits);
+          }
+        } else if (boxType === 'mdhd') {
+          const version = buffer[contentStart];
+          if (version === 0) {
+            const mediaTimescale = view.getUint32(contentStart + 12) || movieTimescale;
+            const totalUnits = Math.round(durationSec * mediaTimescale);
+            view.setUint32(contentStart + 16, totalUnits);
+          } else if (version === 1) {
+            const mediaTimescale = view.getUint32(contentStart + 20) || movieTimescale;
+            const totalUnits = BigInt(Math.round(durationSec * mediaTimescale));
+            view.setBigUint64(contentStart + 24, totalUnits);
+          }
+        }
+
+        offset += boxSize;
+      }
     }
 
+    scanBoxes(0, buffer.length);
     return new Blob([buffer as unknown as BlobPart], { type: blob.type || 'video/mp4' });
   } catch (err) {
     console.warn('MP4 duration patch fallback:', err);
