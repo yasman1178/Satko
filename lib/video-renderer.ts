@@ -1,10 +1,15 @@
 'use client';
 
 import { Scene, MotionType } from '@/types/project';
+import {
+  splitTextIntoTwoLineChunks,
+  TimedSubtitleChunk,
+} from '@/lib/subtitle-engine';
+import { transcodeToMp4InBrowser } from '@/lib/browser-ffmpeg';
 import { patchVideoDuration } from '@/lib/video-duration-patcher';
 
+
 export type VideoQuality = '1080p' | '720p' | '480p';
-export type RenderEngine = 'server_ffmpeg' | 'browser_canvas';
 
 export interface QualityConfig {
   id: VideoQuality;
@@ -26,7 +31,7 @@ export const QUALITY_PRESETS: Record<VideoQuality, QualityConfig> = {
     height: 1080,
     fps: 30,
     bitrate: 8_500_000,
-    description: 'دقة فائقة ونقاء كريستالي مع تفاصيل بارزة وترجمة سينمائية (1920x1080)',
+    description: 'دقة فائقة ونقاء كريستالي مع تفاصيل بارزة وترجمة ضخمة (1920x1080)',
   },
   '720p': {
     id: '720p',
@@ -50,22 +55,6 @@ export const QUALITY_PRESETS: Record<VideoQuality, QualityConfig> = {
   },
 };
 
-import {
-  calculateWeightedWordTiming,
-  type TimedWord,
-  type TimedWordChunk,
-} from '@/lib/word-timing';
-
-export { calculateWeightedWordTiming, type TimedWord, type TimedWordChunk };
-
-export interface RenderOptions {
-  channelName?: string;
-  showWatermark?: boolean;
-  engine?: RenderEngine;
-  timingOffset?: number; // In seconds, e.g. +0.25s delay so subtitles don't rush ahead of audio
-  wordsPerChunk?: number;
-}
-
 export interface RenderProgress {
   currentSceneIndex: number;
   totalScenes: number;
@@ -82,184 +71,7 @@ export interface RenderResult {
   durationSec: number;
   sizeBytes: number;
   mimeType: string;
-  engine: RenderEngine;
 }
-
-export function splitTextIntoWordChunks(text: string, durationSec: number = 4.0): TimedWordChunk[] {
-  return calculateWeightedWordTiming(text, durationSec, 0.25);
-}
-
-/**
- * Generates standard SRT subtitle text for the entire project
- * so creators can import it into CapCut, Premiere Pro, or DaVinci Resolve.
- */
-export function exportSrtSubtitles(scenes: Scene[], timingOffsetSec: number = 0.25): string {
-  let srt = '';
-  let counter = 1;
-  let globalElapsed = 0;
-
-  const formatSrtTime = (seconds: number) => {
-    const safe = Math.max(0, seconds);
-    const h = Math.floor(safe / 3600);
-    const m = Math.floor((safe % 3600) / 60);
-    const s = Math.floor(safe % 60);
-    const ms = Math.floor((safe % 1) * 1000);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
-  };
-
-  for (const scene of scenes) {
-    const duration = scene.duration_seconds || 3.8;
-    const chunks = calculateWeightedWordTiming(scene.narration_text || '', duration, timingOffsetSec);
-
-    for (const chunk of chunks) {
-      const start = formatSrtTime(globalElapsed + chunk.startSec);
-      const end = formatSrtTime(globalElapsed + chunk.endSec);
-
-      srt += `${counter}\n`;
-      srt += `${start} --> ${end}\n`;
-      srt += `${chunk.text}\n\n`;
-      counter++;
-    }
-
-    globalElapsed += duration;
-  }
-
-  return srt;
-}
-
-/**
- * High-Speed Server FFmpeg Video Render Pipeline
- * Immune to browser tab throttling / minimizing.
- * Produces genuine MP4 with crystal clear H.264 / AAC encoding.
- */
-export async function renderServerVideo(
-  scenes: Scene[],
-  quality: VideoQuality = '1080p',
-  onProgress: (p: RenderProgress) => void,
-  options?: RenderOptions,
-  abortSignal?: AbortSignal
-): Promise<RenderResult> {
-  if (!scenes || scenes.length === 0) {
-    throw new Error('لا توجد مشاهد صالحة للرندر');
-  }
-
-  const totalEstimatedDuration = scenes.reduce(
-    (sum, s) => sum + (s.duration_seconds || 3.8),
-    0
-  );
-
-  onProgress({
-    currentSceneIndex: 0,
-    totalScenes: scenes.length,
-    percent: 2,
-    currentTimeSec: 0,
-    totalTimeSec: Math.round(totalEstimatedDuration),
-    statusText: 'إرسال مشروع الفيديو إلى محرك السيرفر السحابي (FFmpeg)...',
-  });
-
-  // 1. Send render request to server API
-  const response = await fetch('/api/render/server', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      scenes: scenes.map((s, idx) => ({
-        scene_id: s.scene_id || `sc_${idx + 1}`,
-        narration_text: s.narration_text || '',
-        duration_seconds: s.duration_seconds || 3.8,
-        audio_url: s.audio_url || '',
-        image_url: s.image_url || '',
-        motion: s.motion || 'zoom_in',
-      })),
-      quality: quality === '480p' ? '720p' : quality, // FFmpeg handles 720p and 1080p fast
-      channelName: options?.channelName || 'MachinaMind',
-      showWatermark: options?.showWatermark !== false,
-      timingOffset: options?.timingOffset ?? 0.25,
-      wordsPerChunk: options?.wordsPerChunk || 4,
-    }),
-    signal: abortSignal,
-  });
-
-  if (!response.ok) {
-    const errorJson = await response.json().catch(() => ({}));
-    throw new Error(errorJson.error || `فشل الاتصال بسيرفر الرندر (${response.status})`);
-  }
-
-  const { renderId } = await response.json();
-  if (!renderId) {
-    throw new Error('لم يتم استلام معرّف الرندر من السيرفر');
-  }
-
-  // 2. Poll server status until completion
-  // This continues smoothly even if the user switches to other apps or tabs!
-  let isDone = false;
-  let finalStatusData: any = null;
-
-  while (!isDone) {
-    if (abortSignal?.aborted) {
-      throw new Error('تم إلغاء عملية الرندر من قبل المستخدم');
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 650));
-
-    try {
-      const statusRes = await fetch(`/api/render/status/${renderId}`, {
-        cache: 'no-store',
-      });
-      if (statusRes.ok) {
-        const data = await statusRes.json();
-        finalStatusData = data;
-
-        onProgress({
-          currentSceneIndex: data.currentScene || 0,
-          totalScenes: data.totalScenes || scenes.length,
-          percent: Math.min(99, Math.max(5, data.percent || 10)),
-          currentTimeSec: Math.round(((data.percent || 5) / 100) * totalEstimatedDuration),
-          totalTimeSec: Math.round(totalEstimatedDuration),
-          statusText: data.statusText || 'جارِ المعالجة بواسطة FFmpeg...',
-        });
-
-        if (data.status === 'completed') {
-          isDone = true;
-          break;
-        } else if (data.status === 'error') {
-          throw new Error(data.error || 'حدث خطأ أثناء رندر الفيديو على السيرفر');
-        }
-      }
-    } catch (pollErr: any) {
-      if (pollErr.name === 'AbortError') throw pollErr;
-      console.warn('Status poll retry:', pollErr);
-    }
-  }
-
-  // 3. Fetch final video blob for direct in-browser playback & download
-  const downloadUrl = finalStatusData?.downloadUrl || `/api/render/download/${renderId}`;
-  
-  onProgress({
-    currentSceneIndex: scenes.length,
-    totalScenes: scenes.length,
-    percent: 100,
-    currentTimeSec: Math.round(totalEstimatedDuration),
-    totalTimeSec: Math.round(totalEstimatedDuration),
-    statusText: 'اكتمل الرندر! جارِ تجهيز ملف MP4 للمعاينة والتحميل...',
-  });
-
-  const blobRes = await fetch(downloadUrl);
-  const blob = blobRes.ok ? await blobRes.blob() : new Blob([], { type: 'video/mp4' });
-
-  return {
-    blob,
-    url: downloadUrl,
-    filename: finalStatusData?.filename || `Mindplicit_${Date.now()}.mp4`,
-    durationSec: finalStatusData?.durationSec || Math.round(totalEstimatedDuration),
-    sizeBytes: finalStatusData?.sizeBytes || blob.size,
-    mimeType: 'video/mp4',
-    engine: 'server_ffmpeg',
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CLIENT-SIDE ENGINE (Used as instant preview or optional offline fallback)
-// ─────────────────────────────────────────────────────────────────────────────
 
 function drawRoundRect(
   ctx: CanvasRenderingContext2D,
@@ -287,181 +99,11 @@ function drawRoundRect(
   }
 }
 
-export function drawBrandOverlays(
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  scaleRatio: number,
-  channelName: string = 'MachinaMind',
-  showWatermark: boolean = true
-) {
-  ctx.save();
-
-  // Top-Left Channel Badge
-  const badgeX = Math.round(40 * scaleRatio);
-  const badgeY = Math.round(36 * scaleRatio);
-  const badgeH = Math.round(48 * scaleRatio);
-
-  ctx.font = `bold ${Math.round(18 * scaleRatio)}px "Cairo", system-ui, sans-serif`;
-  const nameWidth = ctx.measureText(channelName).width;
-  const badgeW = Math.max(Math.round(190 * scaleRatio), Math.round(nameWidth + 64 * scaleRatio));
-
-  ctx.fillStyle = 'rgba(9, 13, 22, 0.86)';
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
-  ctx.lineWidth = Math.max(1.5, 2 * scaleRatio);
-  drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 12 * scaleRatio);
-  ctx.fill();
-  ctx.stroke();
-
-  // Diamond Icon
-  ctx.fillStyle = '#F59E0B';
-  const iconSize = Math.round(16 * scaleRatio);
-  const iconCenterX = badgeX + Math.round(22 * scaleRatio);
-  const iconCenterY = badgeY + badgeH / 2;
-  ctx.beginPath();
-  ctx.moveTo(iconCenterX, iconCenterY - iconSize / 2);
-  ctx.lineTo(iconCenterX + iconSize / 2, iconCenterY);
-  ctx.lineTo(iconCenterX, iconCenterY + iconSize / 2);
-  ctx.lineTo(iconCenterX - iconSize / 2, iconCenterY);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = '#FFFFFF';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(channelName, iconCenterX + Math.round(14 * scaleRatio), iconCenterY);
-
-  // Bottom-Right Watermark
-  if (showWatermark) {
-    const wmPaddingX = Math.round(36 * scaleRatio);
-    const wmPaddingY = Math.round(32 * scaleRatio);
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'bottom';
-    ctx.font = `600 ${Math.round(16 * scaleRatio)}px "Cairo", system-ui, sans-serif`;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-    ctx.shadowBlur = Math.round(6 * scaleRatio);
-    ctx.fillText(`⬡ ${channelName.toUpperCase()}`, width - wmPaddingX, height - wmPaddingY);
-  }
-
-  ctx.restore();
-}
-
-export function drawCinematicSubtitles(
-  ctx: CanvasRenderingContext2D,
-  chunk: TimedWordChunk,
-  sceneElapsedSec: number,
-  width: number,
-  height: number,
-  scaleRatio: number
-) {
-  if (!chunk || !chunk.text) return;
-
-  ctx.save();
-
-  // Atmospheric scrim
-  const scrimH = Math.round(340 * scaleRatio);
-  const textScrim = ctx.createLinearGradient(0, height - scrimH, 0, height);
-  textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
-  textScrim.addColorStop(0.35, 'rgba(5, 8, 16, 0.45)');
-  textScrim.addColorStop(0.7, 'rgba(5, 8, 16, 0.78)');
-  textScrim.addColorStop(1, 'rgba(5, 8, 16, 0.94)');
-  ctx.fillStyle = textScrim;
-  ctx.fillRect(0, height - scrimH, width, scrimH);
-
-  const fontSize = Math.round(56 * scaleRatio);
-  ctx.font = `bold ${fontSize}px "Cairo", system-ui, sans-serif`;
-  ctx.textBaseline = 'middle';
-
-  const words = chunk.words && chunk.words.length > 0 ? chunk.words : [];
-  const textY = height - Math.round(130 * scaleRatio);
-  const spaceWidth = ctx.measureText(' ').width;
-
-  const wordMeasurements = words.map((w) => ({
-    text: w.text,
-    width: ctx.measureText(w.text).width,
-    startSec: w.startSec,
-    endSec: w.endSec,
-  }));
-
-  const totalPhraseWidth =
-    wordMeasurements.reduce((acc, m) => acc + m.width, 0) +
-    Math.max(0, wordMeasurements.length - 1) * spaceWidth;
-
-  let phraseScale = 1.0;
-  const maxAllowedWidth = width * 0.86;
-  if (totalPhraseWidth > maxAllowedWidth) {
-    phraseScale = maxAllowedWidth / totalPhraseWidth;
-  }
-
-  ctx.translate(width / 2, textY);
-  if (phraseScale < 1.0) {
-    ctx.scale(phraseScale, phraseScale);
-  }
-
-  let currentDrawX = -totalPhraseWidth / 2;
-
-  for (let i = 0; i < wordMeasurements.length; i++) {
-    const wm = wordMeasurements[i];
-    const isSpoken = sceneElapsedSec >= wm.startSec && sceneElapsedSec <= wm.endSec;
-    const isPast = sceneElapsedSec > wm.endSec;
-
-    ctx.save();
-    if (isSpoken) {
-      // Golden yellow highlight for currently spoken word
-      ctx.fillStyle = '#F59E0B';
-      ctx.shadowColor = 'rgba(245, 158, 11, 0.8)';
-      ctx.shadowBlur = Math.round(14 * scaleRatio);
-    } else if (isPast) {
-      // Solid white for already spoken words
-      ctx.fillStyle = '#FFFFFF';
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
-      ctx.shadowBlur = Math.round(8 * scaleRatio);
-    } else {
-      // Slightly muted white for upcoming words in the phrase
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
-      ctx.shadowBlur = Math.round(6 * scaleRatio);
-    }
-
-    ctx.textAlign = 'left';
-    ctx.fillText(wm.text, currentDrawX, 0);
-    ctx.restore();
-
-    currentDrawX += wm.width + spaceWidth;
-  }
-
-  ctx.restore();
-}
-
 /**
- * Loads an AudioBuffer from an audio URL or generates a silent buffer
+ * Preloads an image safely with error fallback
  */
-async function loadAudioBuffer(
-  audioCtx: AudioContext,
-  url: string | undefined,
-  defaultDuration: number
-): Promise<AudioBuffer> {
-  if (url) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        const arrayBuffer = await response.arrayBuffer();
-        const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-        return decoded;
-      }
-    } catch (err) {
-      console.warn('Audio fetch failed, generating silence buffer:', err);
-    }
-  }
-
-  const sampleRate = audioCtx.sampleRate || 44100;
-  const frameCount = Math.max(sampleRate, Math.round(sampleRate * (defaultDuration || 3.8)));
-  return audioCtx.createBuffer(1, frameCount, sampleRate);
-}
-
-function preloadImage(url: string | undefined): Promise<HTMLImageElement | null> {
-  if (!url) return Promise.resolve(null);
+async function preloadImage(url?: string): Promise<HTMLImageElement | null> {
+  if (!url) return null;
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -471,69 +113,90 @@ function preloadImage(url: string | undefined): Promise<HTMLImageElement | null>
   });
 }
 
-function getBestSupportedMimeType(): { mimeType: string; extension: string } {
-  if (typeof MediaRecorder === 'undefined') {
-    return { mimeType: 'video/webm', extension: 'webm' };
-  }
-  const types = [
-    { mime: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
-    { mime: 'video/mp4', ext: 'mp4' },
-    { mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
-    { mime: 'video/webm;codecs=vp8,opus', ext: 'webm' },
-    { mime: 'video/webm', ext: 'webm' },
-  ];
-  for (const t of types) {
-    if (MediaRecorder.isTypeSupported(t.mime)) {
-      return { mimeType: t.mime, extension: t.ext };
+/**
+ * Loads and decodes an audio buffer from a URL or creates a silent buffer
+ */
+async function loadAudioBuffer(
+  audioCtx: AudioContext,
+  url?: string,
+  fallbackDuration: number = 3.8
+): Promise<AudioBuffer> {
+  if (url) {
+    try {
+      const response = await fetch(url);
+      const arrayBuffer = await response.arrayBuffer();
+      return await audioCtx.decodeAudioData(arrayBuffer);
+    } catch (err) {
+      console.warn('Audio decoding fallback to silence:', err);
     }
   }
+
+  // Fallback: create silent audio buffer
+  const sampleRate = audioCtx.sampleRate || 44100;
+  const frameCount = Math.max(1, Math.round(sampleRate * fallbackDuration));
+  return audioCtx.createBuffer(2, frameCount, sampleRate);
+}
+
+/**
+ * Detects the best supported MediaRecorder MIME type.
+ * Prioritizes standard MP4 (H.264/AAC or AVC1) as requested by the user,
+ * with reliable WebM (VP9/VP8) fallback if the browser engine does not support native MP4 recorder.
+ */
+function getBestSupportedMimeType(): { mimeType: string; extension: string } {
+  if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') {
+    return { mimeType: 'video/mp4', extension: 'mp4' };
+  }
+
+  // Prioritize standard MP4 first
+  const candidateTypes = [
+    { type: 'video/mp4;codecs=avc1,mp4a.40.2', ext: 'mp4' },
+    { type: 'video/mp4;codecs=avc1', ext: 'mp4' },
+    { type: 'video/mp4;codecs=h264,aac', ext: 'mp4' },
+    { type: 'video/mp4', ext: 'mp4' },
+    { type: 'video/webm;codecs=vp9,opus', ext: 'webm' },
+    { type: 'video/webm;codecs=vp8,opus', ext: 'webm' },
+    { type: 'video/webm', ext: 'webm' },
+  ];
+
+  for (const candidate of candidateTypes) {
+    try {
+      if (MediaRecorder.isTypeSupported(candidate.type)) {
+        return { mimeType: candidate.type, extension: candidate.ext };
+      }
+    } catch {}
+  }
+
   return { mimeType: 'video/webm', extension: 'webm' };
 }
 
 /**
- * Universal video renderer: defaults to high-speed server FFmpeg engine,
- * with graceful fallback to browser canvas if requested.
+ * Renders all project scenes sequentially onto a Canvas with synchronized audio tracks,
+ * Ken Burns camera animation, MachinaMind channel badge, and huge Reels-style high-contrast subtitles.
  */
 export async function renderProjectVideo(
   scenes: Scene[],
-  quality: VideoQuality = '1080p',
-  onProgress: (p: RenderProgress) => void,
-  options?: RenderOptions,
+  quality: VideoQuality,
+  onProgress: (progress: RenderProgress) => void,
   abortSignal?: AbortSignal
 ): Promise<RenderResult> {
-  // Use Server FFmpeg engine by default as chosen by user!
-  if (!options?.engine || options.engine === 'server_ffmpeg') {
-    try {
-      return await renderServerVideo(scenes, quality, onProgress, options, abortSignal);
-    } catch (serverErr: any) {
-      console.warn('Server FFmpeg render encountered issue, trying browser fallback:', serverErr);
-      // If server render was aborted by user, rethrow
-      if (abortSignal?.aborted) throw serverErr;
-    }
+  if (!scenes || scenes.length === 0) {
+    throw new Error('لا توجد مشاهد متاحة للتصدير');
   }
 
-  // Fallback: Browser Canvas Renderer
-  return renderBrowserCanvasVideo(scenes, quality, onProgress, options, abortSignal);
-}
-
-/**
- * Client-Side Browser Canvas Recorder (Fallback)
- */
-async function renderBrowserCanvasVideo(
-  scenes: Scene[],
-  quality: VideoQuality = '1080p',
-  onProgress: (p: RenderProgress) => void,
-  options?: RenderOptions,
-  abortSignal?: AbortSignal
-): Promise<RenderResult> {
-  const config = QUALITY_PRESETS[quality] || QUALITY_PRESETS['1080p'];
+  const config = QUALITY_PRESETS[quality];
   const { width, height, fps, bitrate } = config;
 
-  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-  if (!AudioContextClass) {
-    throw new Error('متصفحك لا يدعم Web Audio API المطلوبة للرندر');
-  }
+  onProgress({
+    currentSceneIndex: 0,
+    totalScenes: scenes.length,
+    percent: 1,
+    currentTimeSec: 0,
+    totalTimeSec: 0,
+    statusText: 'تهيئة محرك الصوتيات والكانفاس...',
+  });
 
+  // 1. Initialize Audio Context & Stream Destination
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
   const audioCtx = new AudioContextClass();
   if (audioCtx.state === 'suspended') {
     await audioCtx.resume();
@@ -541,13 +204,14 @@ async function renderBrowserCanvasVideo(
 
   const audioDest = audioCtx.createMediaStreamDestination();
 
+  // 2. Preload and decode all audio buffers and images ahead of time
   onProgress({
     currentSceneIndex: 0,
     totalScenes: scenes.length,
     percent: 5,
     currentTimeSec: 0,
     totalTimeSec: 0,
-    statusText: 'فك تشفير الوسائط محلياً في الذاكرة...',
+    statusText: 'جارِ فك تشفير مسارات الصوت والصور في الذاكرة...',
   });
 
   const sceneAssets: Array<{
@@ -555,7 +219,7 @@ async function renderBrowserCanvasVideo(
     audioBuffer: AudioBuffer;
     imageElement: HTMLImageElement | null;
     durationSec: number;
-    wordChunks: TimedWordChunk[];
+    subtitleChunks: TimedSubtitleChunk[];
   }> = [];
 
   let totalDurationSec = 0;
@@ -577,26 +241,33 @@ async function renderBrowserCanvasVideo(
     const durationSec = Math.max(2.0, audioBuffer.duration || defaultDuration);
     totalDurationSec += durationSec;
 
-    const wordChunks = calculateWeightedWordTiming(
-      scene.narration_text || '',
-      durationSec,
-      options?.timingOffset ?? 0.25
-    );
+    const subtitleChunks = splitTextIntoTwoLineChunks(scene.narration_text || '');
 
     sceneAssets.push({
       scene,
       audioBuffer,
       imageElement,
       durationSec,
-      wordChunks,
+      subtitleChunks,
+    });
+
+    onProgress({
+      currentSceneIndex: i + 1,
+      totalScenes: scenes.length,
+      percent: Math.round(5 + ((i + 1) / scenes.length) * 15),
+      currentTimeSec: 0,
+      totalTimeSec: totalDurationSec,
+      statusText: `تم تجهيز وسائط المشهد ${i + 1} من ${scenes.length}`,
     });
   }
 
+  // 3. Setup Render Canvas
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d', { alpha: false })!;
 
+  // 4. Capture Stream & Combine with Audio
   const canvasStream = canvas.captureStream(fps);
   const combinedStream = new MediaStream([
     ...canvasStream.getVideoTracks(),
@@ -618,12 +289,32 @@ async function renderBrowserCanvasVideo(
   };
 
   const recorderStoppedPromise = new Promise<Blob>((resolve) => {
-    recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType }));
-    recorder.onerror = () => resolve(new Blob(chunks, { type: mimeType }));
+    recorder.onstop = () => {
+      try {
+        const finalBlob = new Blob(chunks, { type: mimeType });
+        resolve(finalBlob);
+      } catch (err) {
+        console.warn('onstop blob creation fallback:', err);
+        resolve(new Blob(chunks));
+      }
+    };
+    recorder.onerror = (err) => {
+      console.warn('MediaRecorder warning during capture, preserving collected chunks:', err);
+      try {
+        const fallbackBlob = new Blob(chunks, { type: mimeType });
+        resolve(fallbackBlob);
+      } catch {
+        resolve(new Blob(chunks));
+      }
+    };
   });
 
-  recorder.start(250);
+  recorder.start(250); // flush chunks every 250ms
+
+  // Scale ratio helper relative to 1920x1080 baseline
   const scaleRatio = width / 1920;
+
+  // 5. Sequential Scene Rendering Loop
   let accumulatedTime = 0;
 
   for (let sceneIdx = 0; sceneIdx < sceneAssets.length; sceneIdx++) {
@@ -633,8 +324,9 @@ async function renderBrowserCanvasVideo(
       throw new Error('تم إلغاء عملية الرندر من قبل المستخدم');
     }
 
-    const { scene, audioBuffer, imageElement, durationSec, wordChunks } = sceneAssets[sceneIdx];
+    const { scene, audioBuffer, imageElement, durationSec, subtitleChunks } = sceneAssets[sceneIdx];
 
+    // Play scene audio into destination
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(audioDest);
@@ -657,6 +349,7 @@ async function renderBrowserCanvasVideo(
       const sceneElapsedSec = progress * durationSec;
       const currentGlobalSec = accumulatedTime + sceneElapsedSec;
 
+      // ─── Draw Background (Ken Burns motion) ───
       ctx.fillStyle = '#090D16';
       ctx.fillRect(0, 0, width, height);
 
@@ -697,36 +390,179 @@ async function renderBrowserCanvasVideo(
 
         const drawX = (width - drawW) / 2;
         const drawY = (height - drawH) / 2;
+
         ctx.drawImage(imageElement, drawX, drawY, drawW, drawH);
+      } else {
+        // Fallback procedural cinematic gradient
+        const bgGrad = ctx.createRadialGradient(
+          width / 2,
+          height / 2,
+          width * 0.1,
+          width / 2,
+          height / 2,
+          width * 0.7
+        );
+        bgGrad.addColorStop(0, '#1E293B');
+        bgGrad.addColorStop(1, '#0B0F17');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, width, height);
       }
       ctx.restore();
 
-      // Brand Overlays
-      drawBrandOverlays(
-        ctx,
-        width,
-        height,
-        scaleRatio,
-        options?.channelName || 'MachinaMind',
-        options?.showWatermark !== false
+      // Cinematic Vignette
+      const vignette = ctx.createRadialGradient(
+        width / 2,
+        height / 2,
+        width * 0.35,
+        width / 2,
+        height / 2,
+        width * 0.75
       );
+      vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+      vignette.addColorStop(1, 'rgba(0, 0, 0, 0.75)');
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, width, height);
 
-      // Active Subtitles
+      // ─── MachinaMind Channel Badge (Top Left) ───
+      ctx.save();
+      const badgeX = Math.round(40 * scaleRatio);
+      const badgeY = Math.round(36 * scaleRatio);
+      const badgeW = Math.round(230 * scaleRatio);
+      const badgeH = Math.round(52 * scaleRatio);
+
+      ctx.fillStyle = 'rgba(11, 15, 23, 0.88)';
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+      ctx.lineWidth = Math.max(1.5, 2 * scaleRatio);
+      drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 12 * scaleRatio);
+      ctx.fill();
+      ctx.stroke();
+
+      // Brand Icon (Golden Diamond)
+      ctx.fillStyle = '#F59E0B';
+      const iconSize = Math.round(18 * scaleRatio);
+      const iconCenterX = badgeX + Math.round(24 * scaleRatio);
+      const iconCenterY = badgeY + badgeH / 2;
+      ctx.beginPath();
+      ctx.moveTo(iconCenterX, iconCenterY - iconSize / 2);
+      ctx.lineTo(iconCenterX + iconSize / 2, iconCenterY);
+      ctx.lineTo(iconCenterX, iconCenterY + iconSize / 2);
+      ctx.lineTo(iconCenterX - iconSize / 2, iconCenterY);
+      ctx.closePath();
+      ctx.fill();
+
+      // Brand Text
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = `bold ${Math.round(20 * scaleRatio)}px "Plus Jakarta Sans", sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('MachinaMind', iconCenterX + Math.round(16 * scaleRatio), iconCenterY);
+      ctx.restore();
+
+      // ─── Two-Line Clean Cinematic Subtitles (No Loading Bar, No Badges) ───
+      const adjustedTimeSec = Math.max(0, sceneElapsedSec + 0.35);
+      const adjustedProgress = Math.min(1.0, adjustedTimeSec / durationSec);
+
       const activeChunk =
-        wordChunks.find((c) => sceneElapsedSec >= c.startSec && sceneElapsedSec <= c.endSec) ||
-        wordChunks.find((c) => sceneElapsedSec < c.endSec) ||
-        wordChunks[wordChunks.length - 1];
+        subtitleChunks.find((c) => adjustedProgress >= c.startProgress && adjustedProgress <= c.endProgress) ||
+        subtitleChunks[subtitleChunks.length - 1] ||
+        (subtitleChunks[0] ? subtitleChunks[0] : null);
 
-      if (activeChunk && activeChunk.text) {
-        drawCinematicSubtitles(ctx, activeChunk, sceneElapsedSec, width, height, scaleRatio);
+      if (activeChunk && (activeChunk.line1 || activeChunk.line2 || activeChunk.fullText)) {
+        const line1 = activeChunk.line1 || activeChunk.fullText || '';
+        const line2 = activeChunk.line2 || '';
+        const hasSecondLine = Boolean(line2 && line2.trim());
+
+        // Deep Gradient Scrim at bottom for crystal-clear readability
+        const scrimH = Math.round((hasSecondLine ? 340 : 260) * scaleRatio);
+        const textScrim = ctx.createLinearGradient(0, height - scrimH, 0, height);
+        textScrim.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        textScrim.addColorStop(0.35, 'rgba(0, 0, 0, 0.75)');
+        textScrim.addColorStop(1, 'rgba(0, 0, 0, 0.98)');
+        ctx.fillStyle = textScrim;
+        ctx.fillRect(0, height - scrimH, width, scrimH);
+
+        // Calibrate fonts for two lines
+        const fontSize1 = Math.round(48 * scaleRatio);
+        const fontSize2 = Math.round(44 * scaleRatio);
+        const outlineW = Math.max(6, Math.round(10 * scaleRatio));
+
+        ctx.font = `900 ${fontSize1}px system-ui, -apple-system, "Cairo", "Plus Jakarta Sans", sans-serif`;
+        const w1 = ctx.measureText(line1.trim()).width;
+        ctx.font = `900 ${fontSize2}px system-ui, -apple-system, "Cairo", "Plus Jakarta Sans", sans-serif`;
+        const w2 = hasSecondLine ? ctx.measureText(line2.trim()).width : 0;
+        const maxTextW = Math.max(w1, w2);
+
+        const padX = Math.round(52 * scaleRatio);
+        const subCardW = Math.min(width * 0.92, Math.max(width * 0.52, maxTextW + padX * 2));
+        const subCardH = Math.round((hasSecondLine ? 146 : 92) * scaleRatio);
+        const subCardX = (width - subCardW) / 2;
+        const subCardY = height - Math.round((hasSecondLine ? 190 : 140) * scaleRatio);
+
+        ctx.save();
+        // High-contrast clean dark backdrop bar
+        ctx.fillStyle = 'rgba(7, 10, 18, 0.90)';
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.75)';
+        ctx.lineWidth = Math.max(2, 3 * scaleRatio);
+        drawRoundRect(ctx, subCardX, subCardY, subCardW, subCardH, 18 * scaleRatio);
+        ctx.fill();
+        ctx.stroke();
+
+        const textCenterX = width / 2;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineJoin = 'round';
+        ctx.miterLimit = 2;
+
+        if (hasSecondLine) {
+          const line1Y = subCardY + Math.round(44 * scaleRatio);
+          const line2Y = subCardY + Math.round(104 * scaleRatio);
+
+          // Line 1: Pure White with solid black outline
+          ctx.font = `900 ${fontSize1}px system-ui, -apple-system, "Cairo", "Plus Jakarta Sans", sans-serif`;
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = outlineW;
+          ctx.strokeText(line1.trim(), textCenterX, line1Y);
+
+          ctx.fillStyle = '#FFFFFF';
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+          ctx.shadowBlur = Math.round(10 * scaleRatio);
+          ctx.fillText(line1.trim(), textCenterX, line1Y);
+
+          // Line 2: Radiant Golden Yellow with solid black outline
+          ctx.font = `900 ${fontSize2}px system-ui, -apple-system, "Cairo", "Plus Jakarta Sans", sans-serif`;
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = outlineW;
+          ctx.strokeText(line2.trim(), textCenterX, line2Y);
+
+          ctx.fillStyle = '#FDE047';
+          ctx.shadowColor = 'rgba(245, 158, 11, 0.45)';
+          ctx.shadowBlur = Math.round(12 * scaleRatio);
+          ctx.fillText(line2.trim(), textCenterX, line2Y);
+        } else {
+          // Single line centered
+          const lineY = subCardY + subCardH / 2;
+          ctx.font = `900 ${fontSize1}px system-ui, -apple-system, "Cairo", "Plus Jakarta Sans", sans-serif`;
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = outlineW;
+          ctx.strokeText(line1.trim(), textCenterX, lineY);
+
+          ctx.fillStyle = '#FFFFFF';
+          ctx.shadowColor = 'rgba(245, 158, 11, 0.45)';
+          ctx.shadowBlur = Math.round(12 * scaleRatio);
+          ctx.fillText(line1.trim(), textCenterX, lineY);
+        }
+
+        ctx.restore();
       }
 
+      // Sync with real-time video stream pacing
       const now = performance.now();
       const delayNeeded = frameTargetTime - now;
       if (delayNeeded > 1) {
         await new Promise((r) => setTimeout(r, delayNeeded));
       }
 
+      // Update progress every 5 frames
       if (frame % 5 === 0 || frame === totalFrames - 1) {
         const overallPercent = Math.min(
           99,
@@ -746,34 +582,134 @@ async function renderBrowserCanvasVideo(
     accumulatedTime += durationSec;
   }
 
-  await new Promise((r) => setTimeout(r, 200));
-  if (recorder.state === 'recording') {
-    recorder.requestData();
-  }
+  // 6. Finalize Recording and Inject Accurate Duration Metadata
+  onProgress({
+    currentSceneIndex: scenes.length,
+    totalScenes: scenes.length,
+    percent: 99,
+    currentTimeSec: Math.round(totalDurationSec),
+    totalTimeSec: Math.round(totalDurationSec),
+    statusText: 'جارِ إتمام وتجميع ملف الفيديو وحقن بيانات التوقيت لهواتف أندرويد وواتساب...',
+  });
+
+  // Brief flush delay before stopping recorder and request data
+  await new Promise((r) => setTimeout(r, 300));
+  try {
+    if (recorder.state === 'recording') {
+      recorder.requestData();
+    }
+  } catch {}
+
   await new Promise((r) => setTimeout(r, 100));
+
   if (recorder.state !== 'inactive') {
-    recorder.stop();
+    try {
+      recorder.stop();
+    } catch {}
   }
 
-  const rawBlob = await recorderStoppedPromise;
-  const patchedBlob = await patchVideoDuration(
-    rawBlob,
-    totalDurationSec,
-    extension === 'mp4' ? 'mp4' : 'webm'
-  );
+  // Safety race timeout: wait up to 2500ms for recorderStoppedPromise, otherwise construct blob from collected chunks
+  const finalBlob = await Promise.race([
+    recorderStoppedPromise,
+    new Promise<Blob>((resolve) =>
+      setTimeout(() => {
+        resolve(new Blob(chunks, { type: mimeType }));
+      }, 2500)
+    ),
+  ]);
 
-  try { audioCtx.close(); } catch {}
+  // Stop all active tracks to free browser resources
+  try {
+    combinedStream.getTracks().forEach((track) => track.stop());
+  } catch {}
 
-  const url = URL.createObjectURL(patchedBlob);
-  const filename = `Mindplicit_${options?.channelName || 'MachinaMind'}_${Date.now()}.${extension}`;
+  // In-Browser FFmpeg MP4 Engine: Remux and transcode to standard MP4 with +faststart
+  onProgress({
+    currentSceneIndex: scenes.length,
+    totalScenes: scenes.length,
+    percent: 92,
+    currentTimeSec: Math.round(totalDurationSec),
+    totalTimeSec: Math.round(totalDurationSec),
+    statusText: 'تشغيل محرك FFmpeg MP4 المحلي في المتصفح لتجهيز صيغة MP4 القياسية...',
+  });
+
+  let finalMp4Blob: Blob = finalBlob;
+  let finalExtension = 'mp4';
+  let finalMimeType = 'video/mp4';
+
+  try {
+    finalMp4Blob = await transcodeToMp4InBrowser(
+      finalBlob,
+      (p) => {
+        const percent = Math.min(99, Math.round(92 + p.ratio * 7));
+        onProgress({
+          currentSceneIndex: scenes.length,
+          totalScenes: scenes.length,
+          percent,
+          currentTimeSec: Math.round(totalDurationSec),
+          totalTimeSec: Math.round(totalDurationSec),
+          statusText: `[FFmpeg MP4] ${p.message}`,
+        });
+      },
+      abortSignal
+    );
+    finalExtension = 'mp4';
+    finalMimeType = 'video/mp4';
+  } catch (ffmpegErr) {
+    console.warn('In-browser FFmpeg conversion fallback:', ffmpegErr);
+    try {
+      const formatType = (extension === 'mp4' || finalBlob.type.includes('mp4')) ? 'mp4' : 'webm';
+      finalMp4Blob = await patchVideoDuration(finalBlob, totalDurationSec, formatType);
+      finalExtension = formatType;
+      finalMimeType = formatType === 'mp4' ? 'video/mp4' : 'video/webm';
+    } catch {
+      finalMp4Blob = finalBlob;
+      finalExtension = extension;
+      finalMimeType = mimeType;
+    }
+  }
+
+  const downloadUrl = URL.createObjectURL(finalMp4Blob);
+  const cleanTitle = (scenes[0]?.narration_text ? 'Mindplicit_Video' : 'Mindplicit_Video');
+  const filename = `${cleanTitle}_${quality}_${Date.now()}.${finalExtension}`;
+
+  try {
+    audioCtx.close();
+  } catch {}
+
+  onProgress({
+    currentSceneIndex: scenes.length,
+    totalScenes: scenes.length,
+    percent: 100,
+    currentTimeSec: Math.round(totalDurationSec),
+    totalTimeSec: Math.round(totalDurationSec),
+    statusText: 'اكتمل إنتاج الفيديو بنجاح عبر محرك FFmpeg MP4 المحلي! جاري التحميل...',
+  });
+
+  // Automatically trigger download
+  if (typeof document !== 'undefined') {
+    try {
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        try {
+          document.body.removeChild(a);
+        } catch {}
+      }, 1000);
+    } catch (e) {
+      console.warn('Auto download error, user can use manual download:', e);
+    }
+  }
 
   return {
-    blob: patchedBlob,
-    url,
+    blob: finalMp4Blob,
+    url: downloadUrl,
     filename,
-    durationSec: Math.round(totalDurationSec),
-    sizeBytes: patchedBlob.size,
-    mimeType: patchedBlob.type || mimeType,
-    engine: 'browser_canvas',
+    durationSec: totalDurationSec,
+    sizeBytes: finalMp4Blob.size,
+    mimeType: finalMimeType,
   };
 }
