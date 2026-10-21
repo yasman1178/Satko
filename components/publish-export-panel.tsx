@@ -553,7 +553,7 @@ export function PublishExportPanel({ project, onUpdatePublish }: PublishExportPa
               <div className="flex items-center justify-between p-2 bg-slate-950 rounded border border-slate-800 text-[11px] text-slate-400">
                 <span>الميزات المطبقة:</span>
                 <span className="font-medium text-amber-400 flex items-center gap-1">
-                  <span className="text-emerald-400 font-bold">✓</span> محرك FFmpeg MP4 محلي · ترجمة سطرين سينمائية بدون شريط تحميل · ضبط faststart
+                  <span className="text-emerald-400 font-bold">✓</span> دمج صوتي مسبق موحد (Zero Drift) · محرك FFmpeg MP4 · ترجمة سطرين سينمائية
                 </span>
               </div>
             </div>

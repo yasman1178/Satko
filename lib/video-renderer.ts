@@ -8,7 +8,6 @@ import {
 import { transcodeToMp4InBrowser } from '@/lib/browser-ffmpeg';
 import { patchVideoDuration } from '@/lib/video-duration-patcher';
 
-
 export type VideoQuality = '1080p' | '720p' | '480p';
 
 export interface QualityConfig {
@@ -138,8 +137,72 @@ async function loadAudioBuffer(
 }
 
 /**
+ * Pre-mixes (concatenates) all individual scene audio buffers into a single,
+ * contiguous stereo AudioBuffer. This completely eliminates any clock drift,
+ * scheduling-in-the-past issues, or audio dropout across long videos (>15 scenes).
+ */
+function createMasterAudioTrack(
+  audioCtx: AudioContext,
+  sceneAssets: Array<{
+    durationSec: number;
+    audioBuffer: AudioBuffer;
+  }>
+): { masterBuffer: AudioBuffer; totalDurationSec: number; sceneOffsets: Array<{ startSec: number; endSec: number }> } {
+  const sampleRate = audioCtx.sampleRate || 44100;
+  const sceneOffsets: Array<{ startSec: number; endSec: number }> = [];
+
+  let totalDurationSec = 0;
+  for (const asset of sceneAssets) {
+    const startSec = totalDurationSec;
+    const endSec = startSec + asset.durationSec;
+    sceneOffsets.push({ startSec, endSec });
+    totalDurationSec = endSec;
+  }
+
+  const totalFrames = Math.max(1, Math.round(totalDurationSec * sampleRate));
+  const masterBuffer = audioCtx.createBuffer(2, totalFrames, sampleRate);
+  const masterLeft = masterBuffer.getChannelData(0);
+  const masterRight = masterBuffer.getChannelData(1);
+
+  for (let s = 0; s < sceneAssets.length; s++) {
+    const { audioBuffer, durationSec } = sceneAssets[s];
+    const offset = sceneOffsets[s];
+    const startFrame = Math.round(offset.startSec * sampleRate);
+    const targetFrames = Math.round(durationSec * sampleRate);
+
+    const srcChannels = audioBuffer.numberOfChannels;
+    const srcLeft = audioBuffer.getChannelData(0);
+    const srcRight = srcChannels > 1 ? audioBuffer.getChannelData(1) : srcLeft;
+
+    const copyLen = Math.min(audioBuffer.length, targetFrames);
+
+    // Copy audio samples into master buffer
+    for (let i = 0; i < copyLen; i++) {
+      const targetIdx = startFrame + i;
+      if (targetIdx < totalFrames) {
+        masterLeft[targetIdx] = srcLeft[i];
+        masterRight[targetIdx] = srcRight[i];
+      }
+    }
+
+    // Apply micro-fade (15ms) at the end of the scene segment to prevent clicks
+    const fadeSamples = Math.min(Math.round(sampleRate * 0.015), copyLen);
+    for (let f = 0; f < fadeSamples; f++) {
+      const idx = startFrame + copyLen - 1 - f;
+      if (idx >= 0 && idx < totalFrames) {
+        const factor = f / fadeSamples;
+        masterLeft[idx] *= factor;
+        masterRight[idx] *= factor;
+      }
+    }
+  }
+
+  return { masterBuffer, totalDurationSec, sceneOffsets };
+}
+
+/**
  * Detects the best supported MediaRecorder MIME type.
- * Prioritizes standard MP4 (H.264/AAC or AVC1) as requested by the user,
+ * Prioritizes standard MP4 (H.264/AAC or AVC1),
  * with reliable WebM (VP9/VP8) fallback if the browser engine does not support native MP4 recorder.
  */
 function getBestSupportedMimeType(): { mimeType: string; extension: string } {
@@ -170,8 +233,8 @@ function getBestSupportedMimeType(): { mimeType: string; extension: string } {
 }
 
 /**
- * Renders all project scenes sequentially onto a Canvas with synchronized audio tracks,
- * Ken Burns camera animation, MachinaMind channel badge, and huge Reels-style high-contrast subtitles.
+ * Renders all project scenes sequentially onto a Canvas with a pre-mixed, continuous Master Audio Track,
+ * Ken Burns camera animation, MachinaMind channel badge, and Reels-style high-contrast subtitles.
  */
 export async function renderProjectVideo(
   scenes: Scene[],
@@ -192,7 +255,7 @@ export async function renderProjectVideo(
     percent: 1,
     currentTimeSec: 0,
     totalTimeSec: 0,
-    statusText: 'تهيئة محرك الصوتيات والكانفاس...',
+    statusText: 'تهيئة محرك الصوتيات والذاكرة الصوتية المجمعة...',
   });
 
   // 1. Initialize Audio Context & Stream Destination
@@ -208,21 +271,19 @@ export async function renderProjectVideo(
   onProgress({
     currentSceneIndex: 0,
     totalScenes: scenes.length,
-    percent: 5,
+    percent: 4,
     currentTimeSec: 0,
     totalTimeSec: 0,
-    statusText: 'جارِ فك تشفير مسارات الصوت والصور في الذاكرة...',
+    statusText: 'جارِ تحميل وفك تشفير مسارات الصوت والصور في الذاكرة...',
   });
 
-  const sceneAssets: Array<{
+  const rawSceneAssets: Array<{
     scene: Scene;
     audioBuffer: AudioBuffer;
     imageElement: HTMLImageElement | null;
     durationSec: number;
     subtitleChunks: TimedSubtitleChunk[];
   }> = [];
-
-  let totalDurationSec = 0;
 
   for (let i = 0; i < scenes.length; i++) {
     if (abortSignal?.aborted) {
@@ -238,12 +299,10 @@ export async function renderProjectVideo(
       preloadImage(scene.image_url),
     ]);
 
-    const durationSec = Math.max(2.0, audioBuffer.duration || defaultDuration);
-    totalDurationSec += durationSec;
-
+    const durationSec = Math.max(1.8, audioBuffer.duration || defaultDuration);
     const subtitleChunks = splitTextIntoTwoLineChunks(scene.narration_text || '');
 
-    sceneAssets.push({
+    rawSceneAssets.push({
       scene,
       audioBuffer,
       imageElement,
@@ -254,20 +313,45 @@ export async function renderProjectVideo(
     onProgress({
       currentSceneIndex: i + 1,
       totalScenes: scenes.length,
-      percent: Math.round(5 + ((i + 1) / scenes.length) * 15),
+      percent: Math.round(4 + ((i + 1) / scenes.length) * 12),
       currentTimeSec: 0,
-      totalTimeSec: totalDurationSec,
+      totalTimeSec: 0,
       statusText: `تم تجهيز وسائط المشهد ${i + 1} من ${scenes.length}`,
     });
   }
 
-  // 3. Setup Render Canvas
+  // 3. Pre-Mix all scenes into a single Contiguous Master Audio Track
+  onProgress({
+    currentSceneIndex: 0,
+    totalScenes: scenes.length,
+    percent: 18,
+    currentTimeSec: 0,
+    totalTimeSec: 0,
+    statusText: 'دمج ومعايرة المسار الصوتي الكامل (Pre-Mixing Master Audio)...',
+  });
+
+  const { masterBuffer, totalDurationSec, sceneOffsets } = createMasterAudioTrack(
+    audioCtx,
+    rawSceneAssets
+  );
+
+  const sceneAssets = rawSceneAssets.map((asset, idx) => ({
+    ...asset,
+    startSec: sceneOffsets[idx].startSec,
+    endSec: sceneOffsets[idx].endSec,
+  }));
+
+  // 4. Setup Master Audio Node & Destination
+  const masterSource = audioCtx.createBufferSource();
+  masterSource.buffer = masterBuffer;
+  masterSource.connect(audioDest);
+
+  // 5. Setup Render Canvas & Media Recorder
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d', { alpha: false })!;
 
-  // 4. Capture Stream & Combine with Audio
   const canvasStream = canvas.captureStream(fps);
   const combinedStream = new MediaStream([
     ...canvasStream.getVideoTracks(),
@@ -309,57 +393,40 @@ export async function renderProjectVideo(
     };
   });
 
-  recorder.start(250); // flush chunks every 250ms
+  // Start recorder
+  recorder.start(250); // flush every 250ms
 
-  // Scale ratio helper relative to 1920x1080 baseline
+  // Brief warmup so recorder tracks initialize before audio playback starts
+  await new Promise((r) => setTimeout(r, 60));
+
+  // Start Master Audio once at the very beginning of the whole video
+  masterSource.start(0);
+
   const scaleRatio = width / 1920;
-
-  // 5. Sequential Scene Rendering Loop
+  const renderStartTime = performance.now();
   let accumulatedTime = 0;
-  const leadTimeSec = 0.15;
-  const masterStartAudioTime = audioCtx.currentTime + leadTimeSec;
 
+  // 6. Sequential Scene Frame Drawing Loop
   for (let sceneIdx = 0; sceneIdx < sceneAssets.length; sceneIdx++) {
     if (abortSignal?.aborted) {
+      try { masterSource.stop(); } catch {}
       try { recorder.stop(); } catch {}
       try { audioCtx.close(); } catch {}
       throw new Error('تم إلغاء عملية الرندر من قبل المستخدم');
     }
 
-    const { scene, audioBuffer, imageElement, durationSec, subtitleChunks } = sceneAssets[sceneIdx];
-
-    // 1. Isolated GainNode and Audio Source for this specific scene (Strict Zero Bleed)
-    const sceneGain = audioCtx.createGain();
-    const source = audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(sceneGain);
-    sceneGain.connect(audioDest);
-
-    const sceneAudioStart = masterStartAudioTime + accumulatedTime;
-    const sceneAudioEnd = sceneAudioStart + durationSec;
-
-    // 2. Strict 30ms micro-fade out before the hard end to prevent clicks and eliminate any bleeding
-    sceneGain.gain.setValueAtTime(1.0, Math.max(sceneAudioStart, sceneAudioEnd - 0.03));
-    sceneGain.gain.linearRampToValueAtTime(0.0001, sceneAudioEnd);
-
-    // Schedule exact start and hard clamp to durationSec
-    source.start(sceneAudioStart, 0, durationSec);
-    source.stop(sceneAudioEnd);
-
-    const sceneStartTime = performance.now();
-    const frameIntervalMs = 1000 / fps;
+    const { scene, imageElement, durationSec, subtitleChunks, startSec } = sceneAssets[sceneIdx];
     const totalFrames = Math.max(1, Math.round(durationSec * fps));
+    const frameIntervalMs = 1000 / fps;
 
     for (let frame = 0; frame < totalFrames; frame++) {
       if (abortSignal?.aborted) {
-        try { source.stop(); } catch {}
-        try { source.disconnect(); sceneGain.disconnect(); } catch {}
+        try { masterSource.stop(); } catch {}
         try { recorder.stop(); } catch {}
         try { audioCtx.close(); } catch {}
         throw new Error('تم إلغاء عملية الرندر');
       }
 
-      const frameTargetTime = sceneStartTime + frame * frameIntervalMs;
       const progress = Math.min(1.0, frame / Math.max(1, totalFrames - 1));
       const sceneElapsedSec = progress * durationSec;
       const currentGlobalSec = accumulatedTime + sceneElapsedSec;
@@ -570,9 +637,10 @@ export async function renderProjectVideo(
         ctx.restore();
       }
 
-      // Sync with real-time video stream pacing
+      // Exact frame pacing synchronized with master audio timeline
+      const targetTimeMs = renderStartTime + (currentGlobalSec * 1000);
       const now = performance.now();
-      const delayNeeded = frameTargetTime - now;
+      const delayNeeded = targetTimeMs - now;
       if (delayNeeded > 1) {
         await new Promise((r) => setTimeout(r, delayNeeded));
       }
@@ -581,7 +649,7 @@ export async function renderProjectVideo(
       if (frame % 4 === 0 || frame === totalFrames - 1) {
         const overallPercent = Math.min(
           93,
-          Math.round(20 + ((accumulatedTime + sceneElapsedSec) / (totalDurationSec || 1)) * 72)
+          Math.round(20 + ((currentGlobalSec) / (totalDurationSec || 1)) * 72)
         );
         onProgress({
           currentSceneIndex: sceneIdx + 1,
@@ -594,36 +662,28 @@ export async function renderProjectVideo(
       }
     }
 
-    // 3. Ensure AudioContext clock has reached the end of this scene
-    const audioRemainingMs = (sceneAudioEnd - audioCtx.currentTime) * 1000;
-    if (audioRemainingMs > 5) {
-      await new Promise((r) => setTimeout(r, Math.min(1000, audioRemainingMs)));
-    }
-
-    // 4. Strictly stop and disconnect this scene's audio nodes to prevent any overlap
-    try {
-      source.stop();
-    } catch {}
-    try {
-      source.disconnect();
-      sceneGain.disconnect();
-    } catch {}
-
     accumulatedTime += durationSec;
   }
 
-  // 6. Finalize Recording and Inject Accurate Duration Metadata
+  // 7. Finalize Recording and Flush Remaining Samples
   onProgress({
     currentSceneIndex: scenes.length,
     totalScenes: scenes.length,
     percent: 94,
     currentTimeSec: Math.round(totalDurationSec),
     totalTimeSec: Math.round(totalDurationSec),
-    statusText: 'جارِ إتمام وتجميع ملف الفيديو وحقن بيانات التوقيت لهواتف أندرويد وواتساب...',
+    statusText: 'جارِ إتمام المسار الصوتي الكامل وحقن بيانات التوقيت لهواتف أندرويد وواتساب...',
   });
 
+  // Ensure any tiny trailing audio millisecond is captured
+  const totalElapsedMs = performance.now() - renderStartTime;
+  const remainingAudioMs = (totalDurationSec * 1000) - totalElapsedMs;
+  if (remainingAudioMs > 10 && remainingAudioMs < 2000) {
+    await new Promise((r) => setTimeout(r, remainingAudioMs));
+  }
+
   // Brief flush delay before stopping recorder and request data
-  await new Promise((r) => setTimeout(r, 200));
+  await new Promise((r) => setTimeout(r, 150));
   try {
     if (recorder.state === 'recording') {
       recorder.requestData();
@@ -637,6 +697,11 @@ export async function renderProjectVideo(
       recorder.stop();
     } catch {}
   }
+
+  try {
+    masterSource.stop();
+    masterSource.disconnect();
+  } catch {}
 
   // Safety race timeout: wait up to 3000ms for recorderStoppedPromise, otherwise construct blob from collected chunks
   const finalBlob = await Promise.race([
@@ -653,7 +718,7 @@ export async function renderProjectVideo(
     combinedStream.getTracks().forEach((track) => track.stop());
   } catch {}
 
-  // 7. Fast Container Packaging & Duration Patching
+  // 8. Fast Container Packaging & Duration Patching
   onProgress({
     currentSceneIndex: scenes.length,
     totalScenes: scenes.length,
@@ -667,7 +732,7 @@ export async function renderProjectVideo(
   let finalExtension = extension;
   let finalMimeType = mimeType;
 
-  // 1. If native MP4 was recorded by the browser, patch it directly in 20ms
+  // 1. If native MP4 was recorded by the browser, patch it directly
   if (extension === 'mp4' || finalBlob.type.includes('mp4')) {
     try {
       finalExportBlob = await patchVideoDuration(finalBlob, totalDurationSec, 'mp4');
@@ -731,7 +796,7 @@ export async function renderProjectVideo(
     percent: 100,
     currentTimeSec: Math.round(totalDurationSec),
     totalTimeSec: Math.round(totalDurationSec),
-    statusText: `اكتمل إنتاج الفيديو بنجاح بصيغة ${finalExtension.toUpperCase()}! جاري التحميل...`,
+    statusText: `اكتمل إنتاج الفيديو بنجاح بصيغة ${finalExtension.toUpperCase()} مع تزامن كامل للصوت! جاري التحميل...`,
   });
 
   // Automatically trigger download
