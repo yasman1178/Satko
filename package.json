@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000 -H 0.0.0.0",
+    "dev": "node scripts/patch-next.js && next dev -p 3000 -H 0.0.0.0",
     "build": "node scripts/patch-next.js && next build",
     "start": "next start",
     "lint": "eslint .",

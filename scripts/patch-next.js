@@ -4,17 +4,30 @@ const path = require('path');
 function patchFile(p, replacements) {
   if (!fs.existsSync(p)) return;
   let code = fs.readFileSync(p, 'utf8');
-  for (const [regex, replacement] of replacements) {
-    code = code.replace(regex, replacement);
+  let modified = false;
+  for (const [regexOrStr, replacement] of replacements) {
+    if (typeof regexOrStr === 'string') {
+      if (code.includes(regexOrStr) && !code.includes(replacement)) {
+        code = code.replace(regexOrStr, replacement);
+        modified = true;
+      }
+    } else {
+      if (regexOrStr.test(code)) {
+        code = code.replace(regexOrStr, replacement);
+        modified = true;
+      }
+    }
   }
-  fs.writeFileSync(p, code);
+  if (modified) {
+    fs.writeFileSync(p, code);
+  }
 }
 
 // 1. Patch load-manifest.external.js to resolve projectDir/distDir fallback
 patchFile('node_modules/next/dist/server/load-manifest.external.js', [
   [
     'const manifestPath = (0, _path.join)(/* turbopackIgnore: true */ projectDir, distDir, manifest);',
-    'let manifestPath = (0, _path.join)(/* turbopackIgnore: true */ projectDir, distDir, manifest); if (!(0, _fs.existsSync)(manifestPath)) { const alt = (0, _path.join)(process.cwd(), \".next\", manifest); if ((0, _fs.existsSync)(alt)) manifestPath = alt; }'
+    'let manifestPath = (0, _path.join)(/* turbopackIgnore: true */ projectDir, distDir, manifest); if (!(0, _fs.existsSync)(manifestPath)) { const alt = (0, _path.join)(process.cwd(), ".next", manifest); if ((0, _fs.existsSync)(alt)) manifestPath = alt; }'
   ]
 ]);
 
@@ -54,9 +67,23 @@ patchFile('node_modules/next/dist/esm/shared/lib/html-context.shared-runtime.js'
 });
 
 // 4. Patch entries.js to resolve relative appPaths for rootNotFound
-patchFile('node_modules/next/dist/build/entries.js', [
-  [
-    /validFileMatcher\.isRootNotFound\(absolutePath\)/g,
-    `(validFileMatcher.isRootNotFound(absolutePath) || validFileMatcher.isRootNotFound(_path.join(appDir, absolutePath)))`
-  ]
-]);
+if (fs.existsSync('node_modules/next/dist/build/entries.js')) {
+  let eCode = fs.readFileSync('node_modules/next/dist/build/entries.js', 'utf8');
+  if (!eCode.includes('_path.join(appDir, absolutePath)')) {
+    eCode = eCode.replace(
+      /validFileMatcher\.isRootNotFound\(absolutePath\)/g,
+      '(validFileMatcher.isRootNotFound(absolutePath) || validFileMatcher.isRootNotFound(_path.join(appDir, absolutePath)))'
+    );
+    fs.writeFileSync('node_modules/next/dist/build/entries.js', eCode);
+  }
+}
+
+// 5. Patch selectAppPageEntry in app-paths to gracefully fallback if not found
+['node_modules/next/dist/shared/lib/router/utils/app-paths.js', 'node_modules/next/dist/esm/shared/lib/router/utils/app-paths.js'].forEach(p => {
+  patchFile(p, [
+    [
+      /throw new Error\("Invariant: no direct app page entry found for " \+ pathname\);/,
+      'if (appPaths && appPaths.length > 0) return appPaths[0]; return pathname;'
+    ]
+  ]);
+});
